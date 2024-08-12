@@ -6,7 +6,7 @@ pub enum StorageError {
     ReadError,
     ConversionError,
     CreationError,
-    PathError
+    PathError,
 }
 
 impl fmt::Display for StorageError {

@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf};
 
-use rocksdb;
 use crate::error::StorageError;
+use rocksdb;
 
 pub struct Storage {
     db: rocksdb::DB,
@@ -10,9 +10,12 @@ pub struct Storage {
 impl Storage {
     pub fn new() -> Result<Storage, StorageError> {
         let options = create_options();
-        let default_path = env::current_dir().map_err(|_| StorageError::PathError)?.join("storage.db");
+        let default_path = env::current_dir()
+            .map_err(|_| StorageError::PathError)?
+            .join("storage.db");
 
-        let db = rocksdb::DB::open(&options, default_path).map_err(|_| StorageError::CreationError)?;
+        let db =
+            rocksdb::DB::open(&options, default_path).map_err(|_| StorageError::CreationError)?;
         Ok(Storage { db })
     }
 
@@ -24,13 +27,19 @@ impl Storage {
     }
 
     pub fn new_with_options(options: rocksdb::Options) -> Result<Storage, StorageError> {
-        let default_path = env::current_dir().map_err(|_| StorageError::PathError)?.join("storage.db");
+        let default_path = env::current_dir()
+            .map_err(|_| StorageError::PathError)?
+            .join("storage.db");
 
-        let db = rocksdb::DB::open(&options, default_path).map_err(|_| StorageError::CreationError)?;
+        let db =
+            rocksdb::DB::open(&options, default_path).map_err(|_| StorageError::CreationError)?;
         Ok(Storage { db })
     }
 
-    pub fn new_with_option_and_path(path: &PathBuf, options: rocksdb::Options) -> Result<Storage, StorageError> {
+    pub fn new_with_option_and_path(
+        path: &PathBuf,
+        options: rocksdb::Options,
+    ) -> Result<Storage, StorageError> {
         let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
         Ok(Storage { db })
     }
@@ -43,19 +52,25 @@ impl Storage {
         Ok(Storage { db })
     }
 
-    pub fn delete(&self, key: &str) -> Result<(),StorageError>{
-        self.db.delete(key.as_bytes()).map_err(|_| StorageError::WriteError)?;
+    pub fn delete(&self, key: &str) -> Result<(), StorageError> {
+        self.db
+            .delete(key.as_bytes())
+            .map_err(|_| StorageError::WriteError)?;
         Ok(())
     }
 
-    pub fn write(&self, key: &str, value: &str)-> Result<(),StorageError>{
-        self.db.put(key.as_bytes(), value.as_bytes()).map_err(|_| StorageError::WriteError)?;
+    pub fn write(&self, key: &str, value: &str) -> Result<(), StorageError> {
+        self.db
+            .put(key.as_bytes(), value.as_bytes())
+            .map_err(|_| StorageError::WriteError)?;
         Ok(())
     }
 
     pub fn read(&self, key: &str) -> Result<Option<String>, StorageError> {
         match self.db.get(key.as_bytes()) {
-            Ok(Some(value)) => Ok(Some(String::from_utf8(value).map_err(|_| StorageError::ConversionError)?)),
+            Ok(Some(value)) => Ok(Some(
+                String::from_utf8(value).map_err(|_| StorageError::ConversionError)?,
+            )),
             Ok(None) => Ok(None),
             Err(_) => Err(StorageError::ReadError),
         }
@@ -69,12 +84,15 @@ impl Storage {
 
     pub fn partial_compare(&self, key: &str) -> Result<Vec<(String, String)>, StorageError> {
         let mut result = Vec::new();
-        let mut iter = self.db.iterator(rocksdb::IteratorMode::From(key.as_bytes(), rocksdb::Direction::Forward));
-        while let Some(Ok((k,v)))= iter.next() {
+        let mut iter = self.db.iterator(rocksdb::IteratorMode::From(
+            key.as_bytes(),
+            rocksdb::Direction::Forward,
+        ));
+        while let Some(Ok((k, v))) = iter.next() {
             let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
             let v = String::from_utf8(v.to_vec()).map_err(|_| StorageError::ConversionError)?;
             if k.starts_with(key) {
-                result.push((k,v));
+                result.push((k, v));
             } else {
                 break;
             }
@@ -84,10 +102,12 @@ impl Storage {
     }
 
     pub fn has_key(&self, key: &str) -> Result<bool, StorageError> {
-        let result = self.db.get(key.as_bytes()).map_err(|_| StorageError::ReadError)?;
+        let result = self
+            .db
+            .get(key.as_bytes())
+            .map_err(|_| StorageError::ReadError)?;
         Ok(result.is_some())
     }
-    
 }
 
 fn create_options() -> rocksdb::Options {
@@ -96,19 +116,17 @@ fn create_options() -> rocksdb::Options {
     options
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use rand::{thread_rng, RngCore};
+    use std::env;
 
     fn temp_storage() -> PathBuf {
         let dir = env::temp_dir();
         let mut rng = thread_rng();
         let index = rng.next_u32();
-        let storage_path = dir.join(format!("storage_{}.db", index));
-        storage_path
+        dir.join(format!("storage_{}.db", index))
     }
 
     #[test]
@@ -149,7 +167,14 @@ mod tests {
         let _ = fs.write("tes4", "test_value4");
 
         let result = fs.partial_compare("test").unwrap();
-        assert_eq!(result, vec![("test1".to_string(), "test_value1".to_string()), ("test2".to_string(), "test_value2".to_string()), ("test3".to_string(), "test_value3".to_string())]);
+        assert_eq!(
+            result,
+            vec![
+                ("test1".to_string(), "test_value1".to_string()),
+                ("test2".to_string(), "test_value2".to_string()),
+                ("test3".to_string(), "test_value3".to_string())
+            ]
+        );
     }
 
     #[test]
