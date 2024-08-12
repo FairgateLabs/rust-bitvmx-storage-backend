@@ -1,3 +1,5 @@
+use std::{env, path::PathBuf};
+
 use rocksdb;
 use crate::error::StorageError;
 
@@ -10,15 +12,19 @@ impl Storage {
         let mut options = rocksdb::Options::default();
 
         options.create_if_missing(true);
+        options.set_error_if_exists(true);
 
-        let db = rocksdb::DB::open(&options,"/tmp/storage").map_err(|_| StorageError::CreationError)?;
+        let default_path = env::current_dir().map_err(|_| StorageError::PathError)?.join("storage.db");
+
+        let db = rocksdb::DB::open(&options,default_path).map_err(|_| StorageError::CreationError)?;
         Ok(Storage { db })
     }
 
-    pub fn new_with_path(path: &str) -> Result<Storage, StorageError> {
+    pub fn new_with_path(path: &PathBuf) -> Result<Storage, StorageError> {
         let mut options = rocksdb::Options::default();
 
         options.create_if_missing(true);
+        options.set_error_if_exists(true);
 
         let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
         Ok(Storage { db })
@@ -77,12 +83,12 @@ mod tests {
     use std::env;
     use rand::{thread_rng, RngCore};
 
-    fn temp_storage() -> String {
+    fn temp_storage() -> PathBuf {
         let dir = env::temp_dir();
         let mut rng = thread_rng();
         let index = rng.next_u32();
         let storage_path = dir.join(format!("secure_storage_{}.db", index));
-        storage_path.to_str().expect("Failed to get path to temp file").to_string()
+        storage_path
     }
 
     #[test]
