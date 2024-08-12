@@ -61,16 +61,26 @@ fn run(args: Args) -> Result<(), String>{
         } else {
             Storage::new_with_path(&args.storage_path).map_err(|e| e.to_string())?;    
         }
+
     } else if let Some(write) = args.write {
         let key = write[0].as_str();
         let value = write[1].as_str();
 
-        let storage = Storage::new_with_path(&args.storage_path).map_err(|e| e.to_string())?;
+        let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
+        if storage.has_key(key).map_err(|e| e.to_string())? {
+            return Err("Key already exists".to_string());
+        } 
+
         storage.write(key, value).map_err(|e| e.to_string())?;
 
     } else if let Some(read) = args.read {
         let key = read.as_str();
-        let storage = Storage::new_with_path(&args.storage_path).map_err(|e| e.to_string())?;
+        let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
+        
+        if storage.is_empty() {
+            return Err("Storage file is empty".to_string());
+        }
+        
         match storage.read(key) {
             Ok(Some(value)) => println!("{}", value),
             Ok(None) => println!("Key not found"),
@@ -79,18 +89,27 @@ fn run(args: Args) -> Result<(), String>{
 
     } else if let Some(delete) = args.delete {
         let key = delete.as_str();
-        let storage = Storage::new_with_path(&args.storage_path).map_err(|e| e.to_string())?;
+        let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
         storage.delete(key).map_err(|e| e.to_string())?;
+        println!("Key deleted correctly");
 
     } else if let Some(partial_compare) = args.partial_compare {
         let key = partial_compare.as_str();
-        let storage = Storage::new_with_path(&args.storage_path).map_err(|e| e.to_string())?;
-        storage.partial_compare(key).map_err(|e| e.to_string())?;
+        let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
+        storage.partial_compare(key).map_err(|e| e.to_string())? 
+            .iter()
+            .for_each(|(key, value)| println!("Key: {}, Value: {}", key, value)); 
 
     } else if let Some(contains) = args.contains {
         let key = contains.as_str();
-        let storage = Storage::new_with_path(&args.storage_path).map_err(|e| e.to_string())?;
-        storage.has_key(key).map_err(|e| e.to_string())?;
+        let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
+        match storage.has_key(key).map_err(|e| e.to_string())? {
+            true => println!("Key exists"),
+            false => println!("Key does not exist"),
+        }
+
+    } else {
+        return Err("No action provided".to_string());
     }
 
     Ok(())

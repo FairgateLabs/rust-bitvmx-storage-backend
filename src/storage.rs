@@ -9,22 +9,35 @@ pub struct Storage {
 
 impl Storage {
     pub fn new() -> Result<Storage, StorageError> {
-        let mut options = rocksdb::Options::default();
-
-        options.create_if_missing(true);
-        options.set_error_if_exists(true);
-
+        let options = create_options();
         let default_path = env::current_dir().map_err(|_| StorageError::PathError)?.join("storage.db");
 
-        let db = rocksdb::DB::open(&options,default_path).map_err(|_| StorageError::CreationError)?;
+        let db = rocksdb::DB::open(&options, default_path).map_err(|_| StorageError::CreationError)?;
         Ok(Storage { db })
     }
 
     pub fn new_with_path(path: &PathBuf) -> Result<Storage, StorageError> {
-        let mut options = rocksdb::Options::default();
+        let options = create_options();
 
-        options.create_if_missing(true);
-        options.set_error_if_exists(true);
+        let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
+        Ok(Storage { db })
+    }
+
+    pub fn new_with_options(options: rocksdb::Options) -> Result<Storage, StorageError> {
+        let default_path = env::current_dir().map_err(|_| StorageError::PathError)?.join("storage.db");
+
+        let db = rocksdb::DB::open(&options, default_path).map_err(|_| StorageError::CreationError)?;
+        Ok(Storage { db })
+    }
+
+    pub fn new_with_option_and_path(path: &PathBuf, options: rocksdb::Options) -> Result<Storage, StorageError> {
+        let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
+        Ok(Storage { db })
+    }
+
+    pub fn open(path: &PathBuf) -> Result<Storage, StorageError> {
+        let mut options = rocksdb::Options::default();
+        options.create_if_missing(false);
 
         let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
         Ok(Storage { db })
@@ -66,6 +79,7 @@ impl Storage {
                 break;
             }
         }
+
         Ok(result)
     }
 
@@ -74,6 +88,12 @@ impl Storage {
         Ok(result.is_some())
     }
     
+}
+
+fn create_options() -> rocksdb::Options {
+    let mut options = rocksdb::Options::default();
+    options.create_if_missing(true);
+    options
 }
 
 
@@ -87,7 +107,7 @@ mod tests {
         let dir = env::temp_dir();
         let mut rng = thread_rng();
         let index = rng.next_u32();
-        let storage_path = dir.join(format!("secure_storage_{}.db", index));
+        let storage_path = dir.join(format!("storage_{}.db", index));
         storage_path
     }
 
