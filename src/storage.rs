@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf};
 
 use crate::error::StorageError;
-use rocksdb;
+use rocksdb::SliceTransform;
 
 pub struct Storage {
     db: rocksdb::DB,
@@ -46,7 +46,7 @@ impl Storage {
 
     pub fn open(path: &PathBuf) -> Result<Storage, StorageError> {
         let mut options = rocksdb::Options::default();
-        options.create_if_missing(false);
+        options.set_prefix_extractor(get_prefix_extractor());
 
         let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
         Ok(Storage { db })
@@ -113,7 +113,20 @@ impl Storage {
 fn create_options() -> rocksdb::Options {
     let mut options = rocksdb::Options::default();
     options.create_if_missing(true);
+    options.set_prefix_extractor(get_prefix_extractor());
     options
+}
+
+fn get_prefix_extractor() -> SliceTransform {
+    let prefix_extractor = SliceTransform::create("dynamic_prefix", move |key| {
+        let mut positions = key.iter().enumerate().filter(|&(_, &c)| c == b'/').map(|(i, _)| i);
+    
+        if let (Some(_), Some(_), Some(third_pos)) = (positions.next(), positions.next(), positions.next()) {
+            return &key[..third_pos + 1];
+        }
+        key
+    }, None);
+    prefix_extractor
 }
 
 #[cfg(test)]
@@ -183,5 +196,25 @@ mod tests {
         let _ = fs.write("test1", "test_value1");
         assert!(fs.has_key("test1").unwrap());
         assert!(!fs.has_key("test2").unwrap());
+    }
+
+    #[test]
+    fn test_07_open_storage() {
+        let path = temp_storage();
+        let fs = Storage::new_with_path(&path).unwrap();
+        let _ = fs.write("test1", "test_value1");
+
+        drop(fs);
+
+        let fs2 = Storage::open(&path);
+        assert!(fs2.is_ok());
+        assert_eq!(fs2.unwrap().read("test1").unwrap(), Some("test_value1".to_string()));
+    }
+
+    #[test]
+    fn test_08_open_inexistent_storage() {
+        let path = temp_storage();
+        let fs = Storage::open(&path);
+        assert!(fs.is_err());
     }
 }
