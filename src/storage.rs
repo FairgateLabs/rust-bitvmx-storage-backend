@@ -36,7 +36,7 @@ impl Storage {
         Ok(Storage { db })
     }
 
-    pub fn new_with_option_and_path(
+    pub fn new_with_path_and_option(
         path: &PathBuf,
         options: rocksdb::Options,
     ) -> Result<Storage, StorageError> {
@@ -117,7 +117,7 @@ fn create_options() -> rocksdb::Options {
     options
 }
 
-fn get_prefix_extractor() -> SliceTransform {
+pub fn get_prefix_extractor() -> SliceTransform {
     let prefix_extractor = SliceTransform::create("dynamic_prefix", move |key| {
         let mut positions = key.iter().enumerate().filter(|&(_, &c)| c == b'/').map(|(i, _)| i);
     

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
-pub struct Args {
+pub struct Cli {
     ///Action to perform
     #[clap(short, long)]
     action: Option<Action>,
@@ -42,7 +42,7 @@ impl FromStr for Action {
     }
 }
 
-pub fn run(args: Args) -> Result<(), String> {
+pub fn run(args: Cli) -> Result<(), String> {
     if args.storage_path.extension() != Some("db".as_ref()) {
         return Err(StorageError::PathError.to_string());
     }
