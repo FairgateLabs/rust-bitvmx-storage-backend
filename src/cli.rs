@@ -1,29 +1,31 @@
 use clap::Parser;
 use crate::{error::StorageError, storage::Storage};
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    ///Action to perform
     #[clap(short, long)]
     action: Option<Action>,
 
-    ///Path to the storage file
-    #[clap(default_value = "storage.db")]
+    #[clap(index = 1)]
+    key: Option<String>,
+
+    #[clap(index = 2)]
+    value: Option<String>,
+
+    #[clap(index = 3, default_value = "storage.db")]
     storage_path: PathBuf,
 }
-
-use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 enum Action {
     New,
-    Write(String, String),
-    Read(String),
-    Delete(String),
-    PartialCompare(String),
-    Contains(String),
+    Write,
+    Read,
+    Delete,
+    PartialCompare,
+    Contains,
 }
 
 impl FromStr for Action {
@@ -32,11 +34,11 @@ impl FromStr for Action {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "new" | "n" => Ok(Action::New),
-            "write" | "w" => Ok(Action::Write(String::new(), String::new())),
-            "read" | "r" => Ok(Action::Read(String::new())),
-            "delete" | "d" => Ok(Action::Delete(String::new())),
-            "partial_compare" | "pc" => Ok(Action::PartialCompare(String::new())),
-            "contains" | "c" => Ok(Action::Contains(String::new())),
+            "write" | "w" => Ok(Action::Write),
+            "read" | "r" => Ok(Action::Read),
+            "delete" | "d" => Ok(Action::Delete),
+            "partial_compare" | "pc" => Ok(Action::PartialCompare),
+            "contains" | "c" => Ok(Action::Contains),
             _ => Err(format!("Invalid action: {}", s)),
         }
     }
@@ -52,35 +54,40 @@ pub fn run(args: Cli) -> Result<(), String> {
             Storage::new_with_path(&args.storage_path).map_err(|e| e.to_string())?;
             println!("Created new storage at {:?}", args.storage_path);
         }
-        Some(Action::Write(key, value)) => {
+        Some(Action::Write) => {
+            let key = args.key.ok_or("Key is required for write action")?;
+            let value = args.value.ok_or("Value is required for write action")?;
             let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
             storage.write(&key, &value).map_err(|e| e.to_string())?;
             println!("Wrote key {} with value {} to {:?}", key, value, args.storage_path);
         }
-        Some(Action::Read(key)) => {
+        Some(Action::Read) => {
+            let key = args.key.ok_or("Key is required for read action")?;
             let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
             match storage.read(&key).map_err(|e| e.to_string())? {
                 Some(value) => println!("Read key {} with value {} from {:?}", key, value, args.storage_path),
                 None => println!("Key {} not found in {:?}", key, args.storage_path),
             }
         }
-        Some(Action::Delete(key)) => {
+        Some(Action::Delete) => {
+            let key = args.key.ok_or("Key is required for delete action")?;
             let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
             storage.delete(&key).map_err(|e| e.to_string())?;
             println!("Deleted key {} from {:?}", key, args.storage_path);
         }
-        Some(Action::PartialCompare(key)) => {
+        Some(Action::PartialCompare) => {
+            let key = args.key.ok_or("Key is required for partialcompare action")?;
             let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
             let keys = storage.partial_compare(&key).map_err(|e| e.to_string())?;
             println!("Keys partially matching {} in {:?}: {:?}", key, args.storage_path, keys);
         }
-        Some(Action::Contains(key)) => {
+        Some(Action::Contains) => {
+            let key = args.key.ok_or("Key is required for contains action")?;
             let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
             let contains = storage.has_key(&key).map_err(|e| e.to_string())?;
             println!("Key {} {} in {:?}", key, if contains { "exists" } else { "does not exist" }, args.storage_path);
         }
         None => return Err("No action specified".to_string()),
-        
     }
 
     Ok(())
