@@ -47,16 +47,13 @@ fn write_data(db: &Storage) {
     }
 }
 
-fn access_key_benchmark(c: &mut Criterion, db_setup: fn() -> Storage, key_to_access: &str, variant_name: &str) {
-    let db = db_setup();
+fn access_key_benchmark(c: &mut Criterion, storage: &Storage, key_to_access: &str, variant_name: &str) {
 
     c.bench_function(&format!("rocksdb get {} ({})", key_to_access, variant_name), |b| {
         b.iter(|| {
-            let _ = db.read(key_to_access);
+            let _ = storage.read(key_to_access);
         })
     });
-
-    drop(db);
 }
 
 fn random_keys(n: usize) -> Vec<String> {
@@ -86,11 +83,21 @@ fn criterion_benchmark(_c: &mut Criterion) {
     let mut criterion = Criterion::default().measurement_time(Duration::from_secs(10));
     println!("Generating random keys to access");
     let keys_to_access = random_keys(1000);
+    let mut i = 1;
+    println!("Generating storage with prefix extractor");
+    let storage_with_prefix_extractor = setup_database_with_prefix_extractor();
+    println!("Generating storage without prefix extractor");
+    let storage_without_prefix_extractor = setup_database_without_prefix_extractor();
 
     for key in keys_to_access {
-        access_key_benchmark(&mut criterion, setup_database_with_prefix_extractor, &key,"Variant 1");
-        access_key_benchmark(&mut criterion, setup_database_without_prefix_extractor,  &key,"Variant 2");
+        println!("Benchmarking key {} ({})", key, i);
+        access_key_benchmark(&mut criterion, &storage_with_prefix_extractor, &key,"Variant 1");
+        access_key_benchmark(&mut criterion, &storage_without_prefix_extractor,  &key,"Variant 2");
+        i += 1;
     }
+
+    drop(storage_with_prefix_extractor);
+    drop(storage_without_prefix_extractor);
 }
 
 criterion_group!(benches, criterion_benchmark);
