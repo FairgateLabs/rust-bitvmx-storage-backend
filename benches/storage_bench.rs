@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use rust_bitvmx_storage_backend::storage::{Storage, get_prefix_extractor};
+use storage_backend::storage::{Storage, get_prefix_extractor};
 use rocksdb::Options;
 use rand::{thread_rng, RngCore};
 use std::{env, path::PathBuf, time::Duration};

@@ -1,4 +1,4 @@
-use rust_bitvmx_storage_backend::cli::{Cli, run};
+use storage_backend::cli::{Cli, run};
 use clap::Parser;
 
 fn main() {

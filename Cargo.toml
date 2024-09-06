@@ -3,6 +3,9 @@ name = "rust-bitvmx-storage-backend"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "storage_backend"
+
 [dependencies]
 rocksdb = "0.22.0"
 clap = {version = "4.5.15", features = ["derive"] }
