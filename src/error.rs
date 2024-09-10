@@ -1,22 +1,20 @@
-use std::fmt;
+use thiserror::Error;
 
-#[derive(Debug)]
+
+#[derive(Error, Debug)]
 pub enum StorageError {
+    #[error("Document not found")]
+    NotFound,
+    #[error("Error modifying storage")]
     WriteError,
+    #[error("Error reading from storage")]
     ReadError,
+    #[error("Error converting data")]
     ConversionError,
+    #[error("Error serializing/deserializing data")]
+    SerializationError,
+    #[error("Error creating storage")]
     CreationError,
+    #[error("Error with the path")]
     PathError,
-}
-
-impl fmt::Display for StorageError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            StorageError::WriteError => write!(f, "Error modifying to storage"),
-            StorageError::ReadError => write!(f, "Error reading from storage"),
-            StorageError::ConversionError => write!(f, "Error converting data"),
-            StorageError::CreationError => write!(f, "Error creating storage"),
-            StorageError::PathError => write!(f, "Error with the path"),
-        }
-    }
 }
