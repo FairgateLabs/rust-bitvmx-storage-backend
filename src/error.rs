@@ -1,22 +1,19 @@
-use std::fmt;
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum StorageError {
+    #[error("Failed to write to file")]
     WriteError,
-    ReadError,
-    ConversionError,
-    CreationError,
-    PathError,
-}
 
-impl fmt::Display for StorageError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            StorageError::WriteError => write!(f, "Error modifying to storage"),
-            StorageError::ReadError => write!(f, "Error reading from storage"),
-            StorageError::ConversionError => write!(f, "Error converting data"),
-            StorageError::CreationError => write!(f, "Error creating storage"),
-            StorageError::PathError => write!(f, "Error with the path"),
-        }
-    }
+    #[error("Failed to read from file")]
+    ReadError,
+
+    #[error("Failed to create file")]
+    CreationError,
+
+    #[error("Failed to convert value")]
+    ConversionError,
+
+    #[error("Invalid path")]
+    PathError,
 }

@@ -9,6 +9,7 @@ name = "storage_backend"
 [dependencies]
 rocksdb = "0.22.0"
 clap = {version = "4.5.15", features = ["derive"] }
+thiserror = "1.0.29"
 
 [dev-dependencies]
 criterion = "0.5.1"
