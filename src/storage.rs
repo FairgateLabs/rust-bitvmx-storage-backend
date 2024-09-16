@@ -107,6 +107,16 @@ impl Storage {
         is_empty
     }
 
+    pub fn keys(&self) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut iter = self.db.iterator(rocksdb::IteratorMode::Start);
+        while let Some(Ok((k, _))) = iter.next() {
+            let k = String::from_utf8(k.to_vec()).unwrap();
+            result.push(k);
+        }
+        result
+    }
+
     pub fn partial_compare(&self, key: &str) -> Result<Vec<(String, String)>, StorageError> {
         let mut result = Vec::new();
         let mut iter = self.db.iterator(rocksdb::IteratorMode::From(
@@ -313,5 +323,21 @@ mod tests {
         let path = temp_storage();
         let fs = Storage::open(&path);
         assert!(fs.is_err());
+    }
+
+    #[test]
+    fn test_09_keys(){
+        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let _ = fs.write("test1", "test_value1");
+        let _ = fs.write("test2", "test_value2");
+        let _ = fs.write("test3", "test_value3");
+        let _ = fs.write("tes4", "test_value4");
+
+        let keys = fs.keys();
+        assert_eq!(keys.len(), 4);
+        assert!(keys.contains(&"test1".to_string()));
+        assert!(keys.contains(&"test2".to_string()));
+        assert!(keys.contains(&"test3".to_string()));
+        assert!(keys.contains(&"tes4".to_string()));
     }
 }
