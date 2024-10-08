@@ -39,7 +39,7 @@ impl Storage {
             .join("storage.db");
 
         let db =
-            rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), default_path)?;
+            rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), default_path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -47,7 +47,7 @@ impl Storage {
     pub fn new_with_path(path: &PathBuf) -> Result<Storage, StorageError> {
         let options = create_options();
 
-        let db = rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), path)?;
+        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -57,7 +57,7 @@ impl Storage {
             .join("storage.db");
 
         let db =
-            rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), default_path)?;
+            rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), default_path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -65,7 +65,7 @@ impl Storage {
         path: &PathBuf,
         options: rocksdb::Options,
     ) -> Result<Storage, StorageError> {
-        let db = rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), path)?;
+        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -73,7 +73,7 @@ impl Storage {
         let mut options = rocksdb::Options::default();
         options.set_prefix_extractor(get_prefix_extractor());
 
-        let db = rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), path)?;
+        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -176,7 +176,10 @@ impl Storage {
         Ok(())
     }
 
-    
+    pub fn rollback_transaction(&mut self, transaction_id: usize) -> Result<(), StorageError> {
+        self.transactions.remove(&transaction_id).ok_or(StorageError::NotFound)?;
+        Ok(())
+    }
 }
 
 fn delete_with_transaction(key: &str, tx: &Transaction<TransactionDB>) -> Result<(), StorageError> {
@@ -389,5 +392,58 @@ mod tests {
         assert!(keys.contains(&"test2".to_string()));
         assert!(keys.contains(&"test3".to_string()));
         assert!(keys.contains(&"tes4".to_string()));
+    }
+
+    #[test]
+    fn test_10_transaction_commit(){
+        let mut fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let transaction_id = fs.begin_transaction();
+        fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
+        fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
+        fs.commit_transaction(transaction_id).unwrap();
+
+        assert_eq!(fs.read("test1").unwrap(), Some("test_value1".to_string()));
+        assert_eq!(fs.read("test2").unwrap(), Some("test_value2".to_string()));
+        assert_eq!(fs.read("test3").unwrap(), None);
+    }
+
+    #[test]
+    fn test_11_transaction_rollback(){
+        let mut fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let transaction_id = fs.begin_transaction();
+        fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
+        fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
+        fs.rollback_transaction(transaction_id).unwrap();
+
+        assert_eq!(fs.read("test1").unwrap(), None);
+        assert_eq!(fs.read("test2").unwrap(), None);
+    }
+
+    #[test]
+    fn test_12_transactional_delete(){
+        let mut fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let _ = fs.write("test1", "test_value1");
+        let transaction_id = fs.begin_transaction();
+        fs.transactional_delete("test1", transaction_id).unwrap();
+        fs.commit_transaction(transaction_id).unwrap();
+
+        assert_eq!(fs.read("test1").unwrap(), None);
+    }
+
+    #[test]
+    fn test_13_non_commited_transactions_should_not_appear(){
+        let mut fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let transaction_id = fs.begin_transaction();
+        fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
+        fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
+        fs.commit_transaction(transaction_id).unwrap();
+
+        let second_transaction_id = fs.begin_transaction();
+        fs.transactional_write("test3", "test_value3", second_transaction_id).unwrap();
+
+        assert_eq!(fs.read("test1").unwrap(), Some("test_value1".to_string()));
+        assert_eq!(fs.read("test2").unwrap(), Some("test_value2".to_string()));
+        assert_eq!(fs.read("test3").unwrap(), None);
+        fs.rollback_transaction(transaction_id).unwrap();
     }
 }
