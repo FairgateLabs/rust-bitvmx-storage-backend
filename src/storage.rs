@@ -1,14 +1,14 @@
 use std::{collections::HashMap, env, path::PathBuf};
 
 use crate::error::StorageError;
-use rocksdb::{OptimisticTransactionDB, SliceTransform, Transaction};
+use rocksdb::{TransactionDB, SliceTransform, Transaction};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 pub struct Storage{
-    db: rocksdb::OptimisticTransactionDB,
-    transactions: HashMap<usize, Box<rocksdb::Transaction<'static, OptimisticTransactionDB>>>,
+    db: rocksdb::TransactionDB,
+    transactions: HashMap<usize, Box<rocksdb::Transaction<'static, TransactionDB>>>,
 }
 
 pub trait KeyValueStore {
@@ -39,7 +39,7 @@ impl Storage {
             .join("storage.db");
 
         let db =
-            rocksdb::OptimisticTransactionDB::open(&options, default_path)?;
+            rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), default_path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -47,7 +47,7 @@ impl Storage {
     pub fn new_with_path(path: &PathBuf) -> Result<Storage, StorageError> {
         let options = create_options();
 
-        let db = rocksdb::OptimisticTransactionDB::open(&options, path)?;
+        let db = rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -57,7 +57,7 @@ impl Storage {
             .join("storage.db");
 
         let db =
-            rocksdb::OptimisticTransactionDB::open(&options, default_path)?;
+            rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), default_path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -65,7 +65,7 @@ impl Storage {
         path: &PathBuf,
         options: rocksdb::Options,
     ) -> Result<Storage, StorageError> {
-        let db = rocksdb::OptimisticTransactionDB::open(&options, path)?;
+        let db = rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -73,7 +73,7 @@ impl Storage {
         let mut options = rocksdb::Options::default();
         options.set_prefix_extractor(get_prefix_extractor());
 
-        let db = rocksdb::OptimisticTransactionDB::open(&options, path)?;
+        let db = rocksdb::TransactionDB::open(&options, rocksdb::TransactionDBOptions::default(), path)?;
         Ok(Storage { db, transactions: HashMap::new() })
     }
 
@@ -164,7 +164,7 @@ impl Storage {
         let transaction = self.db.transaction();
         let id = self.transactions.len() + 1;
         self.transactions.insert(id, Box::new(
-            unsafe { std::mem::transmute::<_, rocksdb::Transaction<'static, OptimisticTransactionDB>>(transaction) 
+            unsafe { std::mem::transmute::<_, rocksdb::Transaction<'static, TransactionDB>>(transaction) 
         }));
         id
     }
@@ -179,14 +179,14 @@ impl Storage {
     
 }
 
-fn delete_with_transaction(key: &str, tx: &Transaction<OptimisticTransactionDB>) -> Result<(), StorageError> {
+fn delete_with_transaction(key: &str, tx: &Transaction<TransactionDB>) -> Result<(), StorageError> {
     tx.delete(key.as_bytes())
       .map_err(|_| StorageError::WriteError)?;
 
     Ok(())
 }
 
-fn write_with_transaction(tx: &Transaction<OptimisticTransactionDB>, key: &str, value: &str) -> Result<(), StorageError> {
+fn write_with_transaction(tx: &Transaction<TransactionDB>, key: &str, value: &str) -> Result<(), StorageError> {
     tx.put(key.as_bytes(), value.as_bytes())
       .map_err(|_| StorageError::WriteError)?;
     Ok(())
