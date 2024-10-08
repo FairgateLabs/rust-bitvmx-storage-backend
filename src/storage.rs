@@ -1,14 +1,14 @@
 use std::{collections::HashMap, env, path::PathBuf};
 
 use crate::error::StorageError;
-use rocksdb::SliceTransform;
+use rocksdb::{SliceTransform, Transaction, TransactionDB};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-
-pub struct Storage {
-    db: rocksdb::DB,
+pub struct Storage{
+    db: rocksdb::TransactionDB,
+    transactions: HashMap<usize, Transaction<'static,TransactionDB>>,
 }
 
 pub trait KeyValueStore {
@@ -17,16 +17,16 @@ pub trait KeyValueStore {
         K: AsRef<str>,
         V: DeserializeOwned;
     
-    fn set<K, V>(&self, key: K, value: V) -> Result<(), StorageError>
+    fn set<K, V>(&mut self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
     where
         K: AsRef<str>,
         V: Serialize;
 
-    fn save<V>(&self, value: V) -> Result<String, StorageError>
+    fn save<V>(&mut self, value: V, transaction_id: Option<usize>) -> Result<String, StorageError>
     where
         V: Serialize;
 
-    fn update<V>(&self, id: &str, updates: HashMap<&str, Value>) -> Result<V, StorageError>
+    fn update<V>(&mut self, id: &str, updates: HashMap<&str, Value>, transaction_id: Option<usize>) -> Result<V, StorageError>
     where
         V: Serialize + DeserializeOwned + Clone;
 }    
@@ -39,16 +39,16 @@ impl Storage {
             .join("storage.db");
 
         let db =
-            rocksdb::DB::open(&options, default_path).map_err(|_| StorageError::CreationError)?;
-        Ok(Storage { db })
+            rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), default_path)?;
+        Ok(Storage { db, transactions: HashMap::new() })
     }
 
     /// Creates a new storage or opens the existing one if present.
     pub fn new_with_path(path: &PathBuf) -> Result<Storage, StorageError> {
         let options = create_options();
 
-        let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
-        Ok(Storage { db })
+        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
+        Ok(Storage { db, transactions: HashMap::new() })
     }
 
     pub fn new_with_options(options: rocksdb::Options) -> Result<Storage, StorageError> {
@@ -57,37 +57,53 @@ impl Storage {
             .join("storage.db");
 
         let db =
-            rocksdb::DB::open(&options, default_path).map_err(|_| StorageError::CreationError)?;
-        Ok(Storage { db })
+            rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), default_path)?;
+        Ok(Storage { db, transactions: HashMap::new() })
     }
 
     pub fn new_with_path_and_option(
         path: &PathBuf,
         options: rocksdb::Options,
     ) -> Result<Storage, StorageError> {
-        let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
-        Ok(Storage { db })
+        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
+        Ok(Storage { db, transactions: HashMap::new() })
     }
 
     pub fn open(path: &PathBuf) -> Result<Storage, StorageError> {
         let mut options = rocksdb::Options::default();
         options.set_prefix_extractor(get_prefix_extractor());
 
-        let db = rocksdb::DB::open(&options, path).map_err(|_| StorageError::CreationError)?;
-        Ok(Storage { db })
+        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
+        Ok(Storage { db, transactions: HashMap::new() })
     }
 
     pub fn delete(&self, key: &str) -> Result<(), StorageError> {
-        self.db
-            .delete(key.as_bytes())
-            .map_err(|_| StorageError::WriteError)?;
+        let tx = self.db.transaction();
+        delete_with_transaction(key, &tx)?;
+        tx.commit().map_err(|_| StorageError::CommitError)?;
+
         Ok(())
     }
 
+    pub fn transactional_delete(&mut self, key: &str, transaction_id: usize) -> Result<(), StorageError> {
+        let tx = self.transactions.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+        delete_with_transaction(key, tx)?;
+
+        Ok(())
+    }
+    
     pub fn write(&self, key: &str, value: &str) -> Result<(), StorageError> {
-        self.db
-            .put(key.as_bytes(), value.as_bytes())
-            .map_err(|_| StorageError::WriteError)?;
+        let tx = self.db.transaction();
+        write_with_transaction(&tx, key, value)?;
+        tx.commit().map_err(|_| StorageError::CommitError)?;
+
+        Ok(())
+    }
+
+    pub fn transactional_write(&mut self, key: &str, value: &str, transaction_id: usize) -> Result<(), StorageError> {
+        let tx = self.transactions.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+        write_with_transaction(tx, key, value)?;
+
         Ok(())
     }
 
@@ -107,14 +123,14 @@ impl Storage {
         is_empty
     }
 
-    pub fn keys(&self) -> Vec<String> {
+    pub fn keys(&self) -> Result<Vec<String>, StorageError> {
         let mut result = Vec::new();
         let mut iter = self.db.iterator(rocksdb::IteratorMode::Start);
         while let Some(Ok((k, _))) = iter.next() {
-            let k = String::from_utf8(k.to_vec()).unwrap();
+            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
             result.push(k);
         }
-        result
+        Ok(result)
     }
 
     pub fn partial_compare(&self, key: &str) -> Result<Vec<(String, String)>, StorageError> {
@@ -143,6 +159,34 @@ impl Storage {
             .map_err(|_| StorageError::ReadError)?;
         Ok(result.is_some())
     }
+
+    pub fn begin_transaction(&mut self) -> usize {
+        let id = self.transactions.len() + 1;
+        self.transactions.insert(id, self.db.transaction());
+        id
+    }
+
+    pub fn commit_transaction(&mut self, transaction_id: usize) -> Result<(), StorageError> {
+        let tx = self.transactions.remove(&transaction_id).ok_or(StorageError::NotFound)?;
+        tx.commit().map_err(|_| StorageError::CommitError)?;
+
+        Ok(())
+    }
+
+    
+}
+
+fn delete_with_transaction(key: &str, tx: &Transaction<TransactionDB>) -> Result<(), StorageError> {
+    tx.delete(key.as_bytes())
+      .map_err(|_| StorageError::WriteError)?;
+
+    Ok(())
+}
+
+fn write_with_transaction(tx: &Transaction<'_, TransactionDB>, key: &str, value: &str) -> Result<(), StorageError> {
+    tx.put(key.as_bytes(), value.as_bytes())
+      .map_err(|_| StorageError::WriteError)?;
+    Ok(())
 }
 
 impl KeyValueStore for Storage {
@@ -163,7 +207,7 @@ impl KeyValueStore for Storage {
         }
     }
 
-    fn set<K, V>(&self, key: K, value: V) -> Result<(), StorageError>
+    fn set<K, V>(&mut self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
     where
         K: AsRef<str>,
         V: Serialize,
@@ -171,19 +215,23 @@ impl KeyValueStore for Storage {
         let key = key.as_ref();
         let value = serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
 
-        Ok(self.write(key, &value)?)
+        match transaction_id {
+            Some(id) => Ok(self.transactional_write(key, &value, id)?),
+            None => Ok(self.write(key, &value)?),
+            
+        }
     }
 
-    fn save<V>(&self, value: V) -> Result<String, StorageError>
+    fn save<V>(&mut self, value: V, transaction_id: Option<usize>) -> Result<String, StorageError>
     where
         V: Serialize,
     {
         let id = Uuid::new_v4().to_string();
-        self.set(id.clone(), value)?;
+        self.set(id.clone(), value, transaction_id)?;
         Ok(id)
     }
 
-    fn update<V>(&self, id: &str, updates: HashMap<&str, Value>) -> Result<V, StorageError>
+    fn update<V>(&mut self, id: &str, updates: HashMap<&str, Value>, transaction_id: Option<usize>) -> Result<V, StorageError>
     where
         V: Serialize + DeserializeOwned + Clone,
     {
@@ -207,14 +255,13 @@ impl KeyValueStore for Storage {
             let updated_value: V = serde_json::from_value(json_value).map_err(|_| StorageError::SerializationError)?;
 
             // 5. Save the updated value back to the database
-            self.set(id, updated_value.clone())?;
+            self.set(id, updated_value.clone(), transaction_id)?;
 
             Ok(updated_value)
         } else {
             Err(StorageError::NotFound)
         }
     }
-
 }
 
 fn create_options() -> rocksdb::Options {
@@ -333,7 +380,7 @@ mod tests {
         let _ = fs.write("test3", "test_value3");
         let _ = fs.write("tes4", "test_value4");
 
-        let keys = fs.keys();
+        let keys = fs.keys().unwrap();
         assert_eq!(keys.len(), 4);
         assert!(keys.contains(&"test1".to_string()));
         assert!(keys.contains(&"test2".to_string()));
