@@ -59,7 +59,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn write<V: AsRef<Vec<u8>>>(&self, key: &str, value: V) -> Result<(), StorageError> {
+    pub fn write<V: AsRef<[u8]>>(&self, key: &str, value: V) -> Result<(), StorageError> {
         self.db
             .put(key.as_bytes(), value.as_ref())
             .map_err(|_| StorageError::WriteError)?;
