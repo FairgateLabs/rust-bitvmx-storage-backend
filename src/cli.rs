@@ -1,93 +1,144 @@
-use clap::Parser;
-use crate::{error::StorageError, storage::Storage};
-use std::{path::PathBuf, str::FromStr};
+use crate::storage::Storage;
+use std::path::PathBuf;
+use std::fs::File;
+use std::io::Write;
+
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
+#[command(arg_required_else_help = true)]
 pub struct Cli {
-    #[clap(short, long)]
-    action: Option<Action>,
+    #[command(subcommand)]
+    action: Action,
+}
 
-    #[clap(index = 1)]
-    key: Option<String>,
-
-    #[clap(index = 2)]
-    value: Option<String>,
-
-    #[clap(index = 3, default_value = "storage.db")]
+#[derive(Parser, Debug, Clone)]
+struct StoragePath {
+    #[clap(short, long, default_value = "storage.db")]
     storage_path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
-enum Action {
-    New,
-    Write,
-    Read,
-    Delete,
-    PartialCompare,
-    Contains,
+#[derive(Parser, Debug, Clone)]
+struct StorageAndKey {
+    #[clap(short, long)]
+    key: String,
+    #[clap(short, long, default_value = "storage.db")]
+    storage_path: PathBuf,
 }
 
-impl FromStr for Action {
-    type Err = String;
+#[derive(Parser, Debug, Clone)]
+struct StoragetKeyValue {
+    #[clap(short, long)]
+    key: String,
+    #[clap(short, long)]
+    value: String,
+    #[clap(short, long, default_value = "storage.db")]
+    storage_path: PathBuf,
+}
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "new" | "n" => Ok(Action::New),
-            "write" | "w" => Ok(Action::Write),
-            "read" | "r" => Ok(Action::Read),
-            "delete" | "d" => Ok(Action::Delete),
-            "partial_compare" | "pc" => Ok(Action::PartialCompare),
-            "contains" | "c" => Ok(Action::Contains),
-            _ => Err(format!("Invalid action: {}", s)),
+#[derive(Subcommand, Debug)]
+enum Action {
+    New(StoragePath),
+    Write(StoragetKeyValue),
+    Read(StorageAndKey),
+    Delete(StorageAndKey),
+    PartialCompare(StorageAndKey),
+    Contains(StorageAndKey),
+    ListKeys(StoragePath),
+    Dump {
+        #[clap(short, long, default_value = "storage.db")]
+        storage_path: PathBuf,
+        #[clap(short, long, default_value = "dump.json")]
+        dump_file: PathBuf,
+        #[clap(short, long, default_value = "false")]
+        pretty: bool,
+
+    }
+}
+
+impl Action {
+    fn get_storage_path(&self) -> &PathBuf {
+        match self {
+            Action::New(args) => &args.storage_path,
+            Action::Write(args) => &args.storage_path,
+            Action::Read(args) => &args.storage_path,
+            Action::Delete(args) => &args.storage_path,
+            Action::PartialCompare(args) => &args.storage_path,
+            Action::Contains(args) => &args.storage_path,
+            Action::ListKeys(args) => &args.storage_path,
+            Action::Dump{storage_path, .. } => &storage_path,
         }
     }
 }
+
 
 pub fn run(args: Cli) -> Result<(), String> {
-    if args.storage_path.extension() != Some("db".as_ref()) {
-        return Err(StorageError::PathError.to_string());
-    }
+
+    let storage = match args.action {
+        Action::New(storage_path) => {
+            Storage::new_with_path(&storage_path.storage_path).map_err(|e| e.to_string())?;
+            println!("Created new storage at {:?}", storage_path.storage_path);
+            return Ok(()); 
+        },
+        _ => {
+            Storage::open(&args.action.get_storage_path()).map_err(|e| e.to_string())?
+        }
+    };
 
     match args.action {
-        Some(Action::New) => {
-            Storage::new_with_path(&args.storage_path).map_err(|e| e.to_string())?;
-            println!("Created new storage at {:?}", args.storage_path);
+        Action::New(storage_path) => {
+            Storage::new_with_path(&storage_path.storage_path).map_err(|e| e.to_string())?;
+            println!("Created new storage at {:?}", storage_path.storage_path);
         }
-        Some(Action::Write) => {
-            let key = args.key.ok_or("Key is required for write action")?;
-            let value = args.value.ok_or("Value is required for write action")?;
-            let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
-            storage.write(&key, &value).map_err(|e| e.to_string())?;
-            println!("Wrote key {} with value {} to {:?}", key, value, args.storage_path);
+        Action::Write(storage_key_value) => {
+            storage.write(&storage_key_value.key, &storage_key_value.value).map_err(|e| e.to_string())?;
+            println!("Wrote key {} with value {} to {:?}", storage_key_value.key, storage_key_value.value, storage_key_value.storage_path);
         }
-        Some(Action::Read) => {
-            let key = args.key.ok_or("Key is required for read action")?;
-            let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
-            match storage.read(&key).map_err(|e| e.to_string())? {
-                Some(value) => println!("Read key {} with value {} from {:?}", key, value, args.storage_path),
-                None => println!("Key {} not found in {:?}", key, args.storage_path),
+        Action::Read(storage_and_key) => {
+            match storage.read(&storage_and_key.key).map_err(|e| e.to_string())? {
+                Some(value) => println!("Read key {} with value {} from {:?}", storage_and_key.key, value, storage_and_key.storage_path),
+                None => println!("Key {} not found in {:?}", storage_and_key.key, storage_and_key.storage_path),
             }
         }
-        Some(Action::Delete) => {
-            let key = args.key.ok_or("Key is required for delete action")?;
-            let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
-            storage.delete(&key).map_err(|e| e.to_string())?;
-            println!("Deleted key {} from {:?}", key, args.storage_path);
+        Action::Delete(storage_and_key) => {
+            storage.delete(&storage_and_key.key).map_err(|e| e.to_string())?;
+            println!("Deleted key {} from {:?}", storage_and_key.key, storage_and_key.storage_path);
         }
-        Some(Action::PartialCompare) => {
-            let key = args.key.ok_or("Key is required for partialcompare action")?;
-            let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
-            let keys = storage.partial_compare(&key).map_err(|e| e.to_string())?;
-            println!("Keys partially matching {} in {:?}: {:?}", key, args.storage_path, keys);
+        Action::PartialCompare(storage_and_key) => {
+            let keys = storage.partial_compare(&storage_and_key.key).map_err(|e| e.to_string())?;
+            println!("Keys partially matching {} in {:?}: {:?}", storage_and_key.key, storage_and_key.storage_path, keys);
         }
-        Some(Action::Contains) => {
-            let key = args.key.ok_or("Key is required for contains action")?;
-            let storage = Storage::open(&args.storage_path).map_err(|e| e.to_string())?;
-            let contains = storage.has_key(&key).map_err(|e| e.to_string())?;
-            println!("Key {} {} in {:?}", key, if contains { "exists" } else { "does not exist" }, args.storage_path);
-        }
-        None => return Err("No action specified".to_string()),
+        Action::Contains(storage_and_key) => {
+            let contains = storage.has_key(&storage_and_key.key).map_err(|e| e.to_string())?;
+            println!("Key {} {} in {:?}", storage_and_key.key, if contains { "exists" } else { "does not exist" }, storage_and_key.storage_path);
+        },
+        Action::ListKeys(_storage) => {
+            let keys = storage.keys();
+            println!("Listing keys in: {:?}", _storage.storage_path);
+            for key in keys {
+                println!("{}", key);
+            }
+        },
+        Action::Dump{ storage_path: _, dump_file, pretty} => {
+            let keys = storage.keys();
+            let mut json_map = serde_json::Map::new();
+            for key in keys {
+                if let Some(value) = storage.read(&key).map_err(|e| e.to_string())? {
+                    let json_value: serde_json::Value = serde_json::from_str(&value).map_err(|e| e.to_string())?;
+                    json_map.insert(key, json_value);
+                }
+            }
+            println!("Dumped storage content to {:?}", dump_file);
+            let json_data = serde_json::Value::Object(json_map);
+            let mut file = File::create(dump_file).map_err(|e| e.to_string())?;
+            if pretty {
+                file.write_all(serde_json::to_string_pretty(&json_data).map_err(|e| e.to_string())?.as_bytes()).map_err(|e| e.to_string())?;
+            } else {
+                file.write_all(json_data.to_string().as_bytes()).map_err(|e| e.to_string())?;
+            }
+        },
+
     }
 
     Ok(())
