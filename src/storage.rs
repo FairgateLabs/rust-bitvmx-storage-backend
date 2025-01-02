@@ -103,7 +103,6 @@ impl Storage {
     pub fn transactional_write(&mut self, key: &str, value: &str, transaction_id: usize) -> Result<(), StorageError> {
         let tx = self.transactions.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
         write_with_transaction(tx, key, value)?;
-
         Ok(())
     }
 
