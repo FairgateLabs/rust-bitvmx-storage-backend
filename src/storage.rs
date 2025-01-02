@@ -1,11 +1,35 @@
-use std::{env, path::PathBuf};
+use std::{collections::HashMap, env, path::PathBuf};
 
 use crate::error::StorageError;
 use rocksdb::SliceTransform;
+use serde::{de::DeserializeOwned, Serialize};
+use serde_json::Value;
+use uuid::Uuid;
+
 
 pub struct Storage {
     db: rocksdb::DB,
 }
+
+pub trait KeyValueStore {
+    fn get<K, V>(&self, key: K) -> Result<Option<V>, StorageError>
+    where
+        K: AsRef<str>,
+        V: DeserializeOwned;
+    
+    fn set<K, V>(&self, key: K, value: V) -> Result<(), StorageError>
+    where
+        K: AsRef<str>,
+        V: Serialize;
+
+    fn save<V>(&self, value: V) -> Result<String, StorageError>
+    where
+        V: Serialize;
+
+    fn update<V>(&self, id: &str, updates: HashMap<&str, Value>) -> Result<V, StorageError>
+    where
+        V: Serialize + DeserializeOwned + Clone;
+}    
 
 impl Storage {
     pub fn new() -> Result<Storage, StorageError> {
@@ -19,6 +43,7 @@ impl Storage {
         Ok(Storage { db })
     }
 
+    /// Creates a new storage or opens the existing one if present.
     pub fn new_with_path(path: &PathBuf) -> Result<Storage, StorageError> {
         let options = create_options();
 
@@ -118,6 +143,78 @@ impl Storage {
             .map_err(|_| StorageError::ReadError)?;
         Ok(result.is_some())
     }
+}
+
+impl KeyValueStore for Storage {
+    fn get<K, V>(&self, key: K) -> Result<Option<V>, StorageError>
+    where
+        K: AsRef<str>,
+        V: DeserializeOwned,
+    {
+        let key = key.as_ref();
+        let value = self.read(key)?;
+
+        match value {
+            Some(value) => {
+                let value = serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn set<K, V>(&self, key: K, value: V) -> Result<(), StorageError>
+    where
+        K: AsRef<str>,
+        V: Serialize,
+    {
+        let key = key.as_ref();
+        let value = serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
+
+        Ok(self.write(key, &value)?)
+    }
+
+    fn save<V>(&self, value: V) -> Result<String, StorageError>
+    where
+        V: Serialize,
+    {
+        let id = Uuid::new_v4().to_string();
+        self.set(id.clone(), value)?;
+        Ok(id)
+    }
+
+    fn update<V>(&self, id: &str, updates: HashMap<&str, Value>) -> Result<V, StorageError>
+    where
+        V: Serialize + DeserializeOwned + Clone,
+    {
+        // 1. Fetch the existing value from the database
+        let value: Option<V> = self.get(id)?;
+
+        if let Some(value) = value {
+            // 2. Convert the existing value into a JSON object
+            let mut json_value = serde_json::to_value(&value).map_err(|_| StorageError::SerializationError)?;
+
+            // 3. Apply the updates
+            if let Some(json_object) = json_value.as_object_mut() {
+                for (key, update) in updates {
+                    json_object.insert(key.to_string(), update);
+                }
+            } else {
+                return Err(StorageError::SerializationError);
+            }
+
+            // 4. Convert the updated JSON object back to V
+            let updated_value: V = serde_json::from_value(json_value).map_err(|_| StorageError::SerializationError)?;
+
+            // 5. Save the updated value back to the database
+            self.set(id, updated_value.clone())?;
+
+            Ok(updated_value)
+        } else {
+            Err(StorageError::NotFound)
+        }
+    }
+
 }
 
 fn create_options() -> rocksdb::Options {

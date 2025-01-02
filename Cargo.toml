@@ -7,9 +7,12 @@ edition = "2021"
 name = "storage_backend"
 
 [dependencies]
-rocksdb = "0.22.0"
 clap = {version = "4.5.15", features = ["derive"] }
-thiserror = "1.0.29"
+rocksdb = "0.22.0"
+serde = "1.0.204"
+serde_json = "1.0.96"
+thiserror = "1.0.63"
+uuid = { version = "1.10.0", features = ["v4"] }
 
 [dev-dependencies]
 criterion = "0.5.1"

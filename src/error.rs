@@ -1,19 +1,20 @@
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+
+#[derive(Error, Debug)]
 pub enum StorageError {
-    #[error("Failed to write to file")]
+    #[error("Document not found")]
+    NotFound,
+    #[error("Error modifying storage")]
     WriteError,
-
-    #[error("Failed to read from file")]
+    #[error("Error reading from storage")]
     ReadError,
-
-    #[error("Failed to create file")]
-    CreationError,
-
-    #[error("Failed to convert value")]
+    #[error("Error converting data")]
     ConversionError,
-
-    #[error("Invalid path")]
+    #[error("Error serializing/deserializing data")]
+    SerializationError,
+    #[error("Error creating storage")]
+    CreationError,
+    #[error("Error with the path")]
     PathError,
 }
