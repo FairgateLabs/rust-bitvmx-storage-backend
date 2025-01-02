@@ -14,7 +14,9 @@ pub enum StorageError {
     #[error("Error serializing/deserializing data")]
     SerializationError,
     #[error("Error creating storage")]
-    CreationError,
+    CreationError(#[from] rocksdb::Error),
     #[error("Error with the path")]
     PathError,
+    #[error("Error while commiting changes")]
+    CommitError,
 }
