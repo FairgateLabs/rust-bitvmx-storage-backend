@@ -23,8 +23,8 @@ struct StoragePath {
 struct StorageAndKey {
     #[clap(short, long)]
     key: String,
-    #[clap(short, long, default_value = "storage.db")]
-    storage_path: PathBuf,
+    #[clap(flatten)]
+    storage_path: StoragePath,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -33,8 +33,8 @@ struct StoragetKeyValue {
     key: String,
     #[clap(short, long)]
     value: String,
-    #[clap(short, long, default_value = "storage.db")]
-    storage_path: PathBuf,
+    #[clap(flatten)]
+    storage_path: StoragePath,
 }
 
 #[derive(Subcommand, Debug)]
@@ -47,8 +47,8 @@ enum Action {
     Contains(StorageAndKey),
     ListKeys(StoragePath),
     Dump {
-        #[clap(short, long, default_value = "storage.db")]
-        storage_path: PathBuf,
+        #[clap(flatten)]
+        storage_path: StoragePath,
         #[clap(short, long, default_value = "dump.json")]
         dump_file: PathBuf,
         #[clap(short, long, default_value = "false")]
@@ -61,13 +61,13 @@ impl Action {
     fn get_storage_path(&self) -> &PathBuf {
         match self {
             Action::New(args) => &args.storage_path,
-            Action::Write(args) => &args.storage_path,
-            Action::Read(args) => &args.storage_path,
-            Action::Delete(args) => &args.storage_path,
-            Action::PartialCompare(args) => &args.storage_path,
-            Action::Contains(args) => &args.storage_path,
+            Action::Write(args) => &args.storage_path.storage_path,
+            Action::Read(args) => &args.storage_path.storage_path,
+            Action::Delete(args) => &args.storage_path.storage_path,
+            Action::PartialCompare(args) => &args.storage_path.storage_path,
+            Action::Contains(args) => &args.storage_path.storage_path,
             Action::ListKeys(args) => &args.storage_path,
-            Action::Dump{storage_path, .. } => &storage_path,
+            Action::Dump{storage_path, .. } => &storage_path.storage_path,
         }
     }
 }
