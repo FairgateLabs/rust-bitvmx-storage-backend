@@ -28,7 +28,7 @@ struct StorageAndKey {
 }
 
 #[derive(Parser, Debug, Clone)]
-struct StoragetKeyValue {
+struct StorageKeyValue {
     #[clap(short, long)]
     key: String,
     #[clap(short, long)]
@@ -40,7 +40,7 @@ struct StoragetKeyValue {
 #[derive(Subcommand, Debug)]
 enum Action {
     New(StoragePath),
-    Write(StoragetKeyValue),
+    Write(StorageKeyValue),
     Read(StorageAndKey),
     Delete(StorageAndKey),
     PartialCompare(StorageAndKey),
@@ -53,7 +53,6 @@ enum Action {
         dump_file: PathBuf,
         #[clap(short, long, default_value = "false")]
         pretty: bool,
-
     }
 }
 
