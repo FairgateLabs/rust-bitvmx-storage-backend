@@ -113,14 +113,14 @@ pub fn run(args: Cli) -> Result<(), String> {
             println!("Key {} {} in {:?}", storage_and_key.key, if contains { "exists" } else { "does not exist" }, storage_and_key.storage_path);
         },
         Action::ListKeys(_storage) => {
-            let keys = storage.keys();
+            let keys = storage.keys().map_err(|e| e.to_string())?;
             println!("Listing keys in: {:?}", _storage.storage_path);
             for key in keys {
                 println!("{}", key);
             }
         },
         Action::Dump{ storage_path: _, dump_file, pretty} => {
-            let keys = storage.keys();
+            let keys = storage.keys().map_err(|e| e.to_string())?;
             let mut json_map = serde_json::Map::new();
             for key in keys {
                 if let Some(value) = storage.read(&key).map_err(|e| e.to_string())? {
