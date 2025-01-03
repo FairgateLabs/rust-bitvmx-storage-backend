@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_10_transaction_commit(){
-        let mut fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let fs = Storage::new_with_path(&temp_storage()).unwrap();
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
         fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn test_11_transaction_rollback(){
-        let mut fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let fs = Storage::new_with_path(&temp_storage()).unwrap();
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
         fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_12_transactional_delete(){
-        let mut fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let fs = Storage::new_with_path(&temp_storage()).unwrap();
         let _ = fs.write("test1", "test_value1");
         let transaction_id = fs.begin_transaction();
         fs.transactional_delete("test1", transaction_id).unwrap();
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_13_non_commited_transactions_should_not_appear(){
-        let mut fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let fs = Storage::new_with_path(&temp_storage()).unwrap();
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
         fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
