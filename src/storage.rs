@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, path::PathBuf};
+use std::{cell::RefCell, collections::HashMap, env, path::PathBuf};
 
 use crate::error::StorageError;
 use rocksdb::{TransactionDB, SliceTransform, Transaction};
@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 pub struct Storage{
     db: rocksdb::TransactionDB,
-    transactions: HashMap<usize, Box<rocksdb::Transaction<'static, TransactionDB>>>,
+    transactions: RefCell<HashMap<usize, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
 }
 
 pub trait KeyValueStore {
@@ -17,16 +17,16 @@ pub trait KeyValueStore {
         K: AsRef<str>,
         V: DeserializeOwned;
     
-    fn set<K, V>(&mut self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
+    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
     where
         K: AsRef<str>,
         V: Serialize;
 
-    fn save<V>(&mut self, value: V, transaction_id: Option<usize>) -> Result<String, StorageError>
+    fn save<V>(&self, value: V, transaction_id: Option<usize>) -> Result<String, StorageError>
     where
         V: Serialize;
 
-    fn update<V>(&mut self, id: &str, updates: HashMap<&str, Value>, transaction_id: Option<usize>) -> Result<V, StorageError>
+    fn update<V>(&self, id: &str, updates: HashMap<&str, Value>, transaction_id: Option<usize>) -> Result<V, StorageError>
     where
         V: Serialize + DeserializeOwned + Clone;
 }    
@@ -37,18 +37,13 @@ impl Storage {
         let default_path = env::current_dir()
             .map_err(|_| StorageError::PathError)?
             .join("storage.db");
-
-        let db =
-            rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), default_path)?;
-        Ok(Storage { db, transactions: HashMap::new() })
+        Storage::new_with_path_and_option(&default_path, options)
     }
 
     /// Creates a new storage or opens the existing one if present.
     pub fn new_with_path(path: &PathBuf) -> Result<Storage, StorageError> {
         let options = create_options();
-
-        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
-        Ok(Storage { db, transactions: HashMap::new() })
+        Storage::new_with_path_and_option(path, options)
     }
 
     pub fn new_with_options(options: rocksdb::Options) -> Result<Storage, StorageError> {
@@ -56,9 +51,7 @@ impl Storage {
             .map_err(|_| StorageError::PathError)?
             .join("storage.db");
 
-        let db =
-            rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), default_path)?;
-        Ok(Storage { db, transactions: HashMap::new() })
+        Storage::new_with_path_and_option(&default_path, options)
     }
 
     pub fn new_with_path_and_option(
@@ -66,15 +59,14 @@ impl Storage {
         options: rocksdb::Options,
     ) -> Result<Storage, StorageError> {
         let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
-        Ok(Storage { db, transactions: HashMap::new() })
+        Ok(Storage { db, transactions: RefCell::new(HashMap::new()) })
     }
+
 
     pub fn open(path: &PathBuf) -> Result<Storage, StorageError> {
         let mut options = rocksdb::Options::default();
         options.set_prefix_extractor(get_prefix_extractor());
-
-        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
-        Ok(Storage { db, transactions: HashMap::new() })
+        Storage::new_with_path_and_option(path, options)
     }
 
     pub fn delete(&self, key: &str) -> Result<(), StorageError> {
@@ -85,8 +77,9 @@ impl Storage {
         Ok(())
     }
 
-    pub fn transactional_delete(&mut self, key: &str, transaction_id: usize) -> Result<(), StorageError> {
-        let tx = self.transactions.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+    pub fn transactional_delete(&self, key: &str, transaction_id: usize) -> Result<(), StorageError> {
+        let mut map = self.transactions.borrow_mut();
+        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
         delete_with_transaction(key, tx)?;
 
         Ok(())
@@ -100,8 +93,9 @@ impl Storage {
         Ok(())
     }
 
-    pub fn transactional_write(&mut self, key: &str, value: &str, transaction_id: usize) -> Result<(), StorageError> {
-        let tx = self.transactions.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+    pub fn transactional_write(&self, key: &str, value: &str, transaction_id: usize) -> Result<(), StorageError> {
+        let mut map = self.transactions.borrow_mut();
+        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
         write_with_transaction(tx, key, value)?;
         Ok(())
     }
@@ -159,24 +153,27 @@ impl Storage {
         Ok(result.is_some())
     }
 
-    pub fn begin_transaction(&mut self) -> usize {
+    pub fn begin_transaction(&self) -> usize {
         let transaction = self.db.transaction();
-        let id = self.transactions.len() + 1;
-        self.transactions.insert(id, Box::new(
+        let mut map = self.transactions.borrow_mut();
+        let id = map.len() + 1;
+        map.insert(id, Box::new(
             unsafe { std::mem::transmute::<_, rocksdb::Transaction<'static, TransactionDB>>(transaction) 
         }));
         id
     }
 
-    pub fn commit_transaction(&mut self, transaction_id: usize) -> Result<(), StorageError> {
-        let tx = self.transactions.remove(&transaction_id).ok_or(StorageError::NotFound)?;
+    pub fn commit_transaction(&self, transaction_id: usize) -> Result<(), StorageError> {
+        let mut map = self.transactions.borrow_mut();
+        let tx = map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
 
         Ok(())
     }
 
-    pub fn rollback_transaction(&mut self, transaction_id: usize) -> Result<(), StorageError> {
-        self.transactions.remove(&transaction_id).ok_or(StorageError::NotFound)?;
+    pub fn rollback_transaction(&self, transaction_id: usize) -> Result<(), StorageError> {
+        let mut map = self.transactions.borrow_mut();
+        map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
         Ok(())
     }
 }
@@ -212,7 +209,7 @@ impl KeyValueStore for Storage {
         }
     }
 
-    fn set<K, V>(&mut self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
+    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
     where
         K: AsRef<str>,
         V: Serialize,
@@ -227,7 +224,7 @@ impl KeyValueStore for Storage {
         }
     }
 
-    fn save<V>(&mut self, value: V, transaction_id: Option<usize>) -> Result<String, StorageError>
+    fn save<V>(&self, value: V, transaction_id: Option<usize>) -> Result<String, StorageError>
     where
         V: Serialize,
     {
@@ -236,7 +233,7 @@ impl KeyValueStore for Storage {
         Ok(id)
     }
 
-    fn update<V>(&mut self, id: &str, updates: HashMap<&str, Value>, transaction_id: Option<usize>) -> Result<V, StorageError>
+    fn update<V>(&self, id: &str, updates: HashMap<&str, Value>, transaction_id: Option<usize>) -> Result<V, StorageError>
     where
         V: Serialize + DeserializeOwned + Clone,
     {
