@@ -290,6 +290,7 @@ mod tests {
     use super::*;
     use rand::{thread_rng, RngCore};
     use std::env;
+    use std::fs;
 
     fn temp_storage() -> PathBuf {
         let dir = env::temp_dir();
@@ -298,38 +299,51 @@ mod tests {
         dir.join(format!("storage_{}.db", index))
     }
 
+    fn cleanup_storage(path: &PathBuf) {
+        fs::remove_dir_all(path).unwrap();
+    }
+
     #[test]
     fn test_01_new_storage_starts_empty() {
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         assert!(fs.is_empty());
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_02_add_value_to_storage() {
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_03_read_a_value() {
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_04_delete_value() {
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
         let _ = fs.delete("test");
         assert_eq!(fs.read("test").unwrap(), None);
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_05_find_multiple_answers() {
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test1", "test_value1");
         let _ = fs.write("test2", "test_value2");
         let _ = fs.write("test3", "test_value3");
@@ -344,20 +358,24 @@ mod tests {
                 ("test3".to_string(), "test_value3".to_string())
             ]
         );
+
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_06_has_key() {
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test1", "test_value1");
         assert!(fs.has_key("test1").unwrap());
         assert!(!fs.has_key("test2").unwrap());
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_07_open_storage() {
-        let path = temp_storage();
-        let fs = Storage::new_with_path(&path).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test1", "test_value1");
 
         drop(fs);
@@ -365,6 +383,8 @@ mod tests {
         let fs2 = Storage::open(&path);
         assert!(fs2.is_ok());
         assert_eq!(fs2.unwrap().read("test1").unwrap(), Some("test_value1".to_string()));
+
+        cleanup_storage(path);
     }
 
     #[test]
@@ -376,7 +396,8 @@ mod tests {
 
     #[test]
     fn test_09_keys(){
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test1", "test_value1");
         let _ = fs.write("test2", "test_value2");
         let _ = fs.write("test3", "test_value3");
@@ -388,11 +409,14 @@ mod tests {
         assert!(keys.contains(&"test2".to_string()));
         assert!(keys.contains(&"test3".to_string()));
         assert!(keys.contains(&"tes4".to_string()));
+
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_10_transaction_commit(){
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
         fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
@@ -401,11 +425,14 @@ mod tests {
         assert_eq!(fs.read("test1").unwrap(), Some("test_value1".to_string()));
         assert_eq!(fs.read("test2").unwrap(), Some("test_value2".to_string()));
         assert_eq!(fs.read("test3").unwrap(), None);
+
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_11_transaction_rollback(){
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
         fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
@@ -413,22 +440,28 @@ mod tests {
 
         assert_eq!(fs.read("test1").unwrap(), None);
         assert_eq!(fs.read("test2").unwrap(), None);
+
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_12_transactional_delete(){
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test1", "test_value1");
         let transaction_id = fs.begin_transaction();
         fs.transactional_delete("test1", transaction_id).unwrap();
         fs.commit_transaction(transaction_id).unwrap();
 
         assert_eq!(fs.read("test1").unwrap(), None);
+
+        cleanup_storage(path);
     }
 
     #[test]
     fn test_13_non_commited_transactions_should_not_appear(){
-        let fs = Storage::new_with_path(&temp_storage()).unwrap();
+        let path = &temp_storage();
+        let fs = Storage::new_with_path(path).unwrap();
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
         fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
@@ -441,5 +474,7 @@ mod tests {
         assert_eq!(fs.read("test2").unwrap(), Some("test_value2".to_string()));
         assert_eq!(fs.read("test3").unwrap(), None);
         fs.rollback_transaction(transaction_id).unwrap();
+
+        cleanup_storage(path);
     }
 }
