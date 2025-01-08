@@ -1,12 +1,12 @@
 use std::{cell::RefCell, collections::HashMap, env, path::PathBuf};
 
 use crate::error::StorageError;
-use rocksdb::{TransactionDB, SliceTransform, Transaction};
+use rocksdb::{SliceTransform, Transaction, TransactionDB};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-pub struct Storage{
+pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<usize, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
 }
@@ -16,8 +16,13 @@ pub trait KeyValueStore {
     where
         K: AsRef<str>,
         V: DeserializeOwned;
-    
-    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
+
+    fn set<K, V>(
+        &self,
+        key: K,
+        value: V,
+        transaction_id: Option<usize>,
+    ) -> Result<(), StorageError>
     where
         K: AsRef<str>,
         V: Serialize;
@@ -26,10 +31,15 @@ pub trait KeyValueStore {
     where
         V: Serialize;
 
-    fn update<V>(&self, id: &str, updates: HashMap<&str, Value>, transaction_id: Option<usize>) -> Result<V, StorageError>
+    fn update<V>(
+        &self,
+        id: &str,
+        updates: HashMap<&str, Value>,
+        transaction_id: Option<usize>,
+    ) -> Result<V, StorageError>
     where
         V: Serialize + DeserializeOwned + Clone;
-}    
+}
 
 impl Storage {
     pub fn new() -> Result<Storage, StorageError> {
@@ -58,10 +68,16 @@ impl Storage {
         path: &PathBuf,
         options: rocksdb::Options,
     ) -> Result<Storage, StorageError> {
-        let db = rocksdb::TransactionDB::open(&options, &rocksdb::TransactionDBOptions::default(), path)?;
-        Ok(Storage { db, transactions: RefCell::new(HashMap::new()) })
+        let db = rocksdb::TransactionDB::open(
+            &options,
+            &rocksdb::TransactionDBOptions::default(),
+            path,
+        )?;
+        Ok(Storage {
+            db,
+            transactions: RefCell::new(HashMap::new()),
+        })
     }
-
 
     pub fn open(path: &PathBuf) -> Result<Storage, StorageError> {
         let mut options = rocksdb::Options::default();
@@ -77,14 +93,18 @@ impl Storage {
         Ok(())
     }
 
-    pub fn transactional_delete(&self, key: &str, transaction_id: usize) -> Result<(), StorageError> {
+    pub fn transactional_delete(
+        &self,
+        key: &str,
+        transaction_id: usize,
+    ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
         delete_with_transaction(key, tx)?;
 
         Ok(())
     }
-    
+
     pub fn write(&self, key: &str, value: &str) -> Result<(), StorageError> {
         let tx = self.db.transaction();
         write_with_transaction(&tx, key, value)?;
@@ -93,7 +113,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn transactional_write(&self, key: &str, value: &str, transaction_id: usize) -> Result<(), StorageError> {
+    pub fn transactional_write(
+        &self,
+        key: &str,
+        value: &str,
+        transaction_id: usize,
+    ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
         write_with_transaction(tx, key, value)?;
@@ -157,9 +182,12 @@ impl Storage {
         let transaction = self.db.transaction();
         let mut map = self.transactions.borrow_mut();
         let id = map.len() + 1;
-        map.insert(id, Box::new(
-            unsafe { std::mem::transmute::<_, rocksdb::Transaction<'static, TransactionDB>>(transaction) 
-        }));
+        map.insert(
+            id,
+            Box::new(unsafe {
+                std::mem::transmute::<_, rocksdb::Transaction<'static, TransactionDB>>(transaction)
+            }),
+        );
         id
     }
 
@@ -180,14 +208,18 @@ impl Storage {
 
 fn delete_with_transaction(key: &str, tx: &Transaction<TransactionDB>) -> Result<(), StorageError> {
     tx.delete(key.as_bytes())
-      .map_err(|_| StorageError::WriteError)?;
+        .map_err(|_| StorageError::WriteError)?;
 
     Ok(())
 }
 
-fn write_with_transaction(tx: &Transaction<TransactionDB>, key: &str, value: &str) -> Result<(), StorageError> {
+fn write_with_transaction(
+    tx: &Transaction<TransactionDB>,
+    key: &str,
+    value: &str,
+) -> Result<(), StorageError> {
     tx.put(key.as_bytes(), value.as_bytes())
-      .map_err(|_| StorageError::WriteError)?;
+        .map_err(|_| StorageError::WriteError)?;
     Ok(())
 }
 
@@ -202,7 +234,8 @@ impl KeyValueStore for Storage {
 
         match value {
             Some(value) => {
-                let value = serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
+                let value =
+                    serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
                 Ok(Some(value))
             }
             None => Ok(None),
@@ -220,7 +253,6 @@ impl KeyValueStore for Storage {
         match transaction_id {
             Some(id) => Ok(self.transactional_write(key, &value, id)?),
             None => Ok(self.write(key, &value)?),
-            
         }
     }
 
@@ -233,7 +265,12 @@ impl KeyValueStore for Storage {
         Ok(id)
     }
 
-    fn update<V>(&self, id: &str, updates: HashMap<&str, Value>, transaction_id: Option<usize>) -> Result<V, StorageError>
+    fn update<V>(
+        &self,
+        id: &str,
+        updates: HashMap<&str, Value>,
+        transaction_id: Option<usize>,
+    ) -> Result<V, StorageError>
     where
         V: Serialize + DeserializeOwned + Clone,
     {
@@ -242,7 +279,8 @@ impl KeyValueStore for Storage {
 
         if let Some(value) = value {
             // 2. Convert the existing value into a JSON object
-            let mut json_value = serde_json::to_value(&value).map_err(|_| StorageError::SerializationError)?;
+            let mut json_value =
+                serde_json::to_value(&value).map_err(|_| StorageError::SerializationError)?;
 
             // 3. Apply the updates
             if let Some(json_object) = json_value.as_object_mut() {
@@ -254,7 +292,8 @@ impl KeyValueStore for Storage {
             }
 
             // 4. Convert the updated JSON object back to V
-            let updated_value: V = serde_json::from_value(json_value).map_err(|_| StorageError::SerializationError)?;
+            let updated_value: V =
+                serde_json::from_value(json_value).map_err(|_| StorageError::SerializationError)?;
 
             // 5. Save the updated value back to the database
             self.set(id, updated_value.clone(), transaction_id)?;
@@ -274,14 +313,24 @@ fn create_options() -> rocksdb::Options {
 }
 
 pub fn get_prefix_extractor() -> SliceTransform {
-    let prefix_extractor = SliceTransform::create("dynamic_prefix", move |key| {
-        let mut positions = key.iter().enumerate().filter(|&(_, &c)| c == b'/').map(|(i, _)| i);
-    
-        if let (Some(_), Some(_), Some(third_pos)) = (positions.next(), positions.next(), positions.next()) {
-            return &key[..third_pos + 1];
-        }
-        key
-    }, None);
+    let prefix_extractor = SliceTransform::create(
+        "dynamic_prefix",
+        move |key| {
+            let mut positions = key
+                .iter()
+                .enumerate()
+                .filter(|&(_, &c)| c == b'/')
+                .map(|(i, _)| i);
+
+            if let (Some(_), Some(_), Some(third_pos)) =
+                (positions.next(), positions.next(), positions.next())
+            {
+                return &key[..third_pos + 1];
+            }
+            key
+        },
+        None,
+    );
     prefix_extractor
 }
 
@@ -382,7 +431,10 @@ mod tests {
 
         let fs2 = Storage::open(&path);
         assert!(fs2.is_ok());
-        assert_eq!(fs2.unwrap().read("test1").unwrap(), Some("test_value1".to_string()));
+        assert_eq!(
+            fs2.unwrap().read("test1").unwrap(),
+            Some("test_value1".to_string())
+        );
 
         cleanup_storage(path);
     }
@@ -395,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn test_09_keys(){
+    fn test_09_keys() {
         let path = &temp_storage();
         let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test1", "test_value1");
@@ -414,12 +466,14 @@ mod tests {
     }
 
     #[test]
-    fn test_10_transaction_commit(){
+    fn test_10_transaction_commit() {
         let path = &temp_storage();
         let fs = Storage::new_with_path(path).unwrap();
         let transaction_id = fs.begin_transaction();
-        fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
-        fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
+        fs.transactional_write("test1", "test_value1", transaction_id)
+            .unwrap();
+        fs.transactional_write("test2", "test_value2", transaction_id)
+            .unwrap();
         fs.commit_transaction(transaction_id).unwrap();
 
         assert_eq!(fs.read("test1").unwrap(), Some("test_value1".to_string()));
@@ -430,12 +484,14 @@ mod tests {
     }
 
     #[test]
-    fn test_11_transaction_rollback(){
+    fn test_11_transaction_rollback() {
         let path = &temp_storage();
         let fs = Storage::new_with_path(path).unwrap();
         let transaction_id = fs.begin_transaction();
-        fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
-        fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
+        fs.transactional_write("test1", "test_value1", transaction_id)
+            .unwrap();
+        fs.transactional_write("test2", "test_value2", transaction_id)
+            .unwrap();
         fs.rollback_transaction(transaction_id).unwrap();
 
         assert_eq!(fs.read("test1").unwrap(), None);
@@ -445,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn test_12_transactional_delete(){
+    fn test_12_transactional_delete() {
         let path = &temp_storage();
         let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test1", "test_value1");
@@ -459,16 +515,19 @@ mod tests {
     }
 
     #[test]
-    fn test_13_non_commited_transactions_should_not_appear(){
+    fn test_13_non_commited_transactions_should_not_appear() {
         let path = &temp_storage();
         let fs = Storage::new_with_path(path).unwrap();
         let transaction_id = fs.begin_transaction();
-        fs.transactional_write("test1", "test_value1", transaction_id).unwrap();
-        fs.transactional_write("test2", "test_value2", transaction_id).unwrap();
+        fs.transactional_write("test1", "test_value1", transaction_id)
+            .unwrap();
+        fs.transactional_write("test2", "test_value2", transaction_id)
+            .unwrap();
         fs.commit_transaction(transaction_id).unwrap();
 
         let second_transaction_id = fs.begin_transaction();
-        fs.transactional_write("test3", "test_value3", second_transaction_id).unwrap();
+        fs.transactional_write("test3", "test_value3", second_transaction_id)
+            .unwrap();
 
         assert_eq!(fs.read("test1").unwrap(), Some("test_value1".to_string()));
         assert_eq!(fs.read("test2").unwrap(), Some("test_value2".to_string()));
