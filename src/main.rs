@@ -1,5 +1,5 @@
-use storage_backend::cli::{Cli, run};
 use clap::Parser;
+use storage_backend::cli::{run, Cli};
 
 fn main() {
     let args = Cli::parse();
