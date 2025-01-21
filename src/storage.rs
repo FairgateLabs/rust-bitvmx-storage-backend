@@ -17,6 +17,14 @@ pub trait KeyValueStore {
         K: AsRef<str>,
         V: DeserializeOwned;
 
+    fn get_all<V>(&self) -> Result<HashMap<String, V>, StorageError>
+    where
+        V: DeserializeOwned;
+
+    fn find<V>(&self, query: HashMap<&str, Value>) -> Result<Vec<(String, V)>, StorageError>
+    where
+        V: Serialize + for<'de> serde::Deserialize<'de>,;
+
     fn set<K, V>(
         &self,
         key: K,
@@ -240,6 +248,57 @@ impl KeyValueStore for Storage {
             }
             None => Ok(None),
         }
+    }
+
+    fn get_all<V>(&self) -> Result<HashMap<String, V>, StorageError>
+    where
+        V: DeserializeOwned,
+    {
+        let mut result = HashMap::new();
+        let mut iter = self.db.iterator(rocksdb::IteratorMode::Start);
+
+        while let Some(Ok((k, v))) = iter.next() {
+            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            let v = String::from_utf8(v.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            let value: V = serde_json::from_str(&v).map_err(|_| StorageError::ConversionError)?;
+            result.insert(k, value);
+        }
+
+        Ok(result)
+    }
+
+    fn find<V>(&self, query: HashMap<&str, Value>) -> Result<Vec<(String, V)>, StorageError>
+    where
+        V: Serialize + for<'de> serde::Deserialize<'de>,
+    {
+        let mut result = Vec::new();
+        let mut iter = self.db.iterator(rocksdb::IteratorMode::Start);
+
+        while let Some(Ok((k, v))) = iter.next() {
+            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            let v = String::from_utf8(v.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            let value: V = serde_json::from_str(&v).map_err(|_| StorageError::ConversionError)?;
+
+            let mut found = true;
+            for (key, query_value) in query.iter() {
+                let json_value: Value = serde_json::from_str(&v).map_err(|_| StorageError::ConversionError)?;
+                if let Some(value) = json_value.get(key) {
+                    if value != query_value {
+                        found = false;
+                        break;
+                    }
+                } else {
+                    found = false;
+                    break;
+                }
+            }
+
+            if found {
+                result.push((k, value));
+            }
+        }
+
+        Ok(result)
     }
 
     fn set<K, V>(&self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
