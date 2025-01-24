@@ -23,7 +23,7 @@ pub trait KeyValueStore {
 
     fn find<V>(&self, query: HashMap<&str, Value>) -> Result<Vec<(String, V)>, StorageError>
     where
-        V: Serialize + for<'de> serde::Deserialize<'de>,;
+        V: Serialize + for<'de> serde::Deserialize<'de>;
 
     fn set<K, V>(
         &self,
@@ -257,10 +257,10 @@ impl KeyValueStore for Storage {
         let mut result = HashMap::new();
         let keys = self.keys()?;
         for key in keys {
-            let value = match self.get(key.clone()){
+            let value = match self.get(key.clone()) {
                 Ok(Some(value)) => value,
                 Ok(None) => continue,
-                Err(e) => return Err(e)
+                Err(e) => return Err(e),
             };
             result.insert(key, value);
         }
@@ -278,7 +278,8 @@ impl KeyValueStore for Storage {
         for (key, value) in data {
             let mut found = true;
             for (query_key, query_value) in query.iter() {
-                let json_value: Value = serde_json::to_value(&value).map_err(|_| StorageError::ConversionError)?;
+                let json_value: Value =
+                    serde_json::to_value(&value).map_err(|_| StorageError::ConversionError)?;
                 if let Some(value) = json_value.get(query_key) {
                     if value != query_value {
                         found = false;
