@@ -255,13 +255,14 @@ impl KeyValueStore for Storage {
         V: DeserializeOwned,
     {
         let mut result = HashMap::new();
-        let mut iter = self.db.iterator(rocksdb::IteratorMode::Start);
-
-        while let Some(Ok((k, v))) = iter.next() {
-            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-            let v = String::from_utf8(v.to_vec()).map_err(|_| StorageError::ConversionError)?;
-            let value: V = serde_json::from_str(&v).map_err(|_| StorageError::ConversionError)?;
-            result.insert(k, value);
+        let keys = self.keys()?;
+        for key in keys {
+            let value = match self.get(key.clone()){
+                Ok(Some(value)) => value,
+                Ok(None) => continue,
+                Err(e) => return Err(e)
+            };
+            result.insert(key, value);
         }
 
         Ok(result)
@@ -272,17 +273,13 @@ impl KeyValueStore for Storage {
         V: Serialize + for<'de> serde::Deserialize<'de>,
     {
         let mut result = Vec::new();
-        let mut iter = self.db.iterator(rocksdb::IteratorMode::Start);
+        let data = self.get_all::<V>()?;
 
-        while let Some(Ok((k, v))) = iter.next() {
-            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-            let v = String::from_utf8(v.to_vec()).map_err(|_| StorageError::ConversionError)?;
-            let value: V = serde_json::from_str(&v).map_err(|_| StorageError::ConversionError)?;
-
+        for (key, value) in data {
             let mut found = true;
-            for (key, query_value) in query.iter() {
-                let json_value: Value = serde_json::from_str(&v).map_err(|_| StorageError::ConversionError)?;
-                if let Some(value) = json_value.get(key) {
+            for (query_key, query_value) in query.iter() {
+                let json_value: Value = serde_json::to_value(&value).map_err(|_| StorageError::ConversionError)?;
+                if let Some(value) = json_value.get(query_key) {
                     if value != query_value {
                         found = false;
                         break;
@@ -294,7 +291,7 @@ impl KeyValueStore for Storage {
             }
 
             if found {
-                result.push((k, value));
+                result.push((key, value));
             }
         }
 
