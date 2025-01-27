@@ -259,8 +259,14 @@ impl KeyValueStore for Storage {
         for key in keys {
             let value = match self.get(key.clone()) {
                 Ok(Some(value)) => value,
-                Ok(None) => continue,
-                Err(e) => return Err(e),
+                Ok(None) => return Err(StorageError::NotFound),
+                Err(e) => {
+                    if e == StorageError::ConversionError {
+                        continue;
+                    } else {
+                        return Err(e);
+                    }
+                },
             };
             result.insert(key, value);
         }
