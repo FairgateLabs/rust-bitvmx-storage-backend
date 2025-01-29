@@ -159,6 +159,24 @@ impl Storage {
         Ok(result)
     }
 
+    pub fn partial_compare_keys(&self, key: &str) -> Result<Vec<String>, StorageError> {
+        let mut result = Vec::new();
+        let mut iter = self.db.iterator(rocksdb::IteratorMode::From(
+            key.as_bytes(),
+            rocksdb::Direction::Forward,
+        ));
+        while let Some(Ok((k, _))) = iter.next() {
+            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            if k.starts_with(key) {
+                result.push(k);
+            } else {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
+
     pub fn partial_compare(&self, key: &str) -> Result<Vec<(String, String)>, StorageError> {
         let mut result = Vec::new();
         let mut iter = self.db.iterator(rocksdb::IteratorMode::From(
