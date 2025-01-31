@@ -4,7 +4,6 @@ use crate::error::StorageError;
 use rocksdb::{SliceTransform, Transaction, TransactionDB};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
 
 pub struct Storage {
     db: rocksdb::TransactionDB,
@@ -17,14 +16,6 @@ pub trait KeyValueStore {
         K: AsRef<str>,
         V: DeserializeOwned;
 
-    fn get_all<V>(&self) -> Result<HashMap<String, V>, StorageError>
-    where
-        V: DeserializeOwned;
-
-    fn find<V>(&self, query: HashMap<&str, Value>) -> Result<Vec<(String, V)>, StorageError>
-    where
-        V: Serialize + for<'de> serde::Deserialize<'de>;
-
     fn set<K, V>(
         &self,
         key: K,
@@ -33,10 +24,6 @@ pub trait KeyValueStore {
     ) -> Result<(), StorageError>
     where
         K: AsRef<str>,
-        V: Serialize;
-
-    fn save<V>(&self, value: V, transaction_id: Option<usize>) -> Result<String, StorageError>
-    where
         V: Serialize;
 
     fn update<V>(
@@ -268,61 +255,6 @@ impl KeyValueStore for Storage {
         }
     }
 
-    fn get_all<V>(&self) -> Result<HashMap<String, V>, StorageError>
-    where
-        V: DeserializeOwned,
-    {
-        let mut result = HashMap::new();
-        let keys = self.keys()?;
-        for key in keys {
-            let value = match self.get(key.clone()) {
-                Ok(Some(value)) => value,
-                Ok(None) => return Err(StorageError::NotFound),
-                Err(e) => {
-                    if e == StorageError::ConversionError {
-                        continue;
-                    } else {
-                        return Err(e);
-                    }
-                },
-            };
-            result.insert(key, value);
-        }
-
-        Ok(result)
-    }
-
-    fn find<V>(&self, query: HashMap<&str, Value>) -> Result<Vec<(String, V)>, StorageError>
-    where
-        V: Serialize + for<'de> serde::Deserialize<'de>,
-    {
-        let mut result = Vec::new();
-        let data = self.get_all::<V>()?;
-
-        for (key, value) in data {
-            let mut found = true;
-            for (query_key, query_value) in query.iter() {
-                let json_value: Value =
-                    serde_json::to_value(&value).map_err(|_| StorageError::ConversionError)?;
-                if let Some(value) = json_value.get(query_key) {
-                    if value != query_value {
-                        found = false;
-                        break;
-                    }
-                } else {
-                    found = false;
-                    break;
-                }
-            }
-
-            if found {
-                result.push((key, value));
-            }
-        }
-
-        Ok(result)
-    }
-
     fn set<K, V>(&self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
     where
         K: AsRef<str>,
@@ -335,15 +267,6 @@ impl KeyValueStore for Storage {
             Some(id) => Ok(self.transactional_write(key, &value, id)?),
             None => Ok(self.write(key, &value)?),
         }
-    }
-
-    fn save<V>(&self, value: V, transaction_id: Option<usize>) -> Result<String, StorageError>
-    where
-        V: Serialize,
-    {
-        let id = Uuid::new_v4().to_string();
-        self.set(id.clone(), value, transaction_id)?;
-        Ok(id)
     }
 
     fn update<V>(
