@@ -26,13 +26,14 @@ pub trait KeyValueStore {
         K: AsRef<str>,
         V: Serialize;
 
-    fn update<V>(
+    fn update<K, V>(
         &self,
-        id: &str,
-        updates: HashMap<&str, Value>,
+        id: K,
+        updates: &HashMap<&str, Value>,
         transaction_id: Option<usize>,
     ) -> Result<V, StorageError>
     where
+        K: AsRef<str> + std::marker::Copy,
         V: Serialize + DeserializeOwned + Clone;
 }
 
@@ -269,13 +270,14 @@ impl KeyValueStore for Storage {
         }
     }
 
-    fn update<V>(
+    fn update<K, V>(
         &self,
-        id: &str,
-        updates: HashMap<&str, Value>,
+        id: K,
+        updates: &HashMap<&str, Value>,
         transaction_id: Option<usize>,
     ) -> Result<V, StorageError>
     where
+        K: AsRef<str> + std::marker::Copy,
         V: Serialize + DeserializeOwned + Clone,
     {
         // 1. Fetch the existing value from the database
@@ -289,7 +291,7 @@ impl KeyValueStore for Storage {
             // 3. Apply the updates
             if let Some(json_object) = json_value.as_object_mut() {
                 for (key, update) in updates {
-                    json_object.insert(key.to_string(), update);
+                    json_object.insert(key.to_string(), update.clone());
                 }
             } else {
                 return Err(StorageError::SerializationError);
