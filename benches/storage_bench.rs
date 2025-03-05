@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use rand::{thread_rng, RngCore};
 use rocksdb::Options;
-use std::{env, path::PathBuf, time::Duration};
+use std::{env, fs, path::PathBuf, time::Duration};
 use storage_backend::storage::{get_prefix_extractor, Storage};
 
 fn temp_storage() -> PathBuf {
@@ -11,23 +11,23 @@ fn temp_storage() -> PathBuf {
     dir.join(format!("storage_{}.db", index))
 }
 
-fn setup_database_with_prefix_extractor() -> Storage {
+fn setup_database_with_prefix_extractor(storage_path: &PathBuf) -> Storage {
     let mut opts = Options::default();
     opts.create_if_missing(true);
     opts.set_prefix_extractor(get_prefix_extractor());
 
-    let db = Storage::new_with_path_and_option(&temp_storage(), opts).unwrap();
+    let db = Storage::new_with_path_and_option(storage_path, opts).unwrap();
 
     write_data(&db);
 
     db
 }
 
-fn setup_database_without_prefix_extractor() -> Storage {
+fn setup_database_without_prefix_extractor(storage_path: &PathBuf) -> Storage {
     let mut opts = Options::default();
     opts.create_if_missing(true);
 
-    let db = Storage::new_with_path_and_option(&temp_storage(), opts).unwrap();
+    let db = Storage::new_with_path_and_option(storage_path, opts).unwrap();
 
     write_data(&db);
 
@@ -90,9 +90,11 @@ fn criterion_benchmark(_c: &mut Criterion) {
     let keys_to_access = random_keys(1000);
     let mut i = 1;
     println!("Generating storage with prefix extractor");
-    let storage_with_prefix_extractor = setup_database_with_prefix_extractor();
+    let storage_path_1 = temp_storage();
+    let storage_with_prefix_extractor = setup_database_with_prefix_extractor(&storage_path_1);
     println!("Generating storage without prefix extractor");
-    let storage_without_prefix_extractor = setup_database_without_prefix_extractor();
+    let storage_path_2 = temp_storage();
+    let storage_without_prefix_extractor = setup_database_without_prefix_extractor(&storage_path_2);
 
     for key in keys_to_access {
         println!("Benchmarking key {} ({})", key, i);
@@ -112,7 +114,9 @@ fn criterion_benchmark(_c: &mut Criterion) {
     }
 
     drop(storage_with_prefix_extractor);
+    fs::remove_dir_all(&storage_path_1).unwrap();
     drop(storage_without_prefix_extractor);
+    fs::remove_dir_all(&storage_path_2).unwrap();
 }
 
 criterion_group!(benches, criterion_benchmark);
