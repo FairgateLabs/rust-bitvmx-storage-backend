@@ -1,6 +1,7 @@
 use thiserror::Error;
+use std::io::Error as IoError;
 
-#[derive(Error, Debug, PartialEq)]
+#[derive(Error, Debug)]
 pub enum StorageError {
     #[error("Document not found")]
     NotFound,
@@ -18,4 +19,6 @@ pub enum StorageError {
     PathError,
     #[error("Error while commiting changes")]
     CommitError,
+    #[error("Error while eliminating db files: {0}")]
+    EliminationError(#[from] IoError),
 }

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, env, path::PathBuf};
+use std::{cell::RefCell, collections::HashMap, env, fs, path::PathBuf};
 
 use crate::error::StorageError;
 use rocksdb::{SliceTransform, Transaction, TransactionDB};
@@ -79,6 +79,11 @@ impl Storage {
         let mut options = rocksdb::Options::default();
         options.set_prefix_extractor(get_prefix_extractor());
         Storage::new_with_path_and_option(path, options)
+    }
+    
+    pub fn delete_db_files(path: &PathBuf) -> Result<(), StorageError> {
+        fs::remove_dir_all(path)?;
+        Ok(())
     }
 
     pub fn delete(&self, key: &str) -> Result<(), StorageError> {
@@ -345,7 +350,6 @@ mod tests {
     use super::*;
     use rand::{thread_rng, RngCore};
     use std::env;
-    use std::fs;
 
     fn temp_storage() -> PathBuf {
         let dir = env::temp_dir();
@@ -354,16 +358,12 @@ mod tests {
         dir.join(format!("storage_{}.db", index))
     }
 
-    fn cleanup_storage(path: &PathBuf) {
-        fs::remove_dir_all(path).unwrap();
-    }
-
     #[test]
     fn test_01_new_storage_starts_empty() {
         let path = &temp_storage();
         let fs = Storage::new_with_path(path).unwrap();
         assert!(fs.is_empty());
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
         let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -381,7 +381,7 @@ mod tests {
         let fs = Storage::new_with_path(path).unwrap();
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -392,7 +392,7 @@ mod tests {
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
         let _ = fs.delete("test");
         assert_eq!(fs.read("test").unwrap(), None);
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -414,7 +414,7 @@ mod tests {
             ]
         );
 
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -424,7 +424,7 @@ mod tests {
         let _ = fs.write("test1", "test_value1");
         assert!(fs.has_key("test1").unwrap());
         assert!(!fs.has_key("test2").unwrap());
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -442,7 +442,7 @@ mod tests {
             Some("test_value1".to_string())
         );
 
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -468,7 +468,7 @@ mod tests {
         assert!(keys.contains(&"test3".to_string()));
         assert!(keys.contains(&"tes4".to_string()));
 
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(fs.read("test2").unwrap(), Some("test_value2".to_string()));
         assert_eq!(fs.read("test3").unwrap(), None);
 
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -503,7 +503,7 @@ mod tests {
         assert_eq!(fs.read("test1").unwrap(), None);
         assert_eq!(fs.read("test2").unwrap(), None);
 
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -517,7 +517,7 @@ mod tests {
 
         assert_eq!(fs.read("test1").unwrap(), None);
 
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 
     #[test]
@@ -540,6 +540,6 @@ mod tests {
         assert_eq!(fs.read("test3").unwrap(), None);
         fs.rollback_transaction(transaction_id).unwrap();
 
-        cleanup_storage(path);
+        Storage::delete_db_files(path).unwrap();
     }
 }
