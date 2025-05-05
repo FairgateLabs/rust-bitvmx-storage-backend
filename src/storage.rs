@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn test_01_new_storage_starts_empty() -> Result<(), StorageError> {
+    fn test_new_storage_starts_empty() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         assert!(fs.is_empty());
         Storage::delete_db_files(&path).unwrap();
@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn test_02_add_value_to_storage() -> Result<(), StorageError> {
+    fn test_add_value_to_storage() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
@@ -373,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn test_03_read_a_value() -> Result<(), StorageError> {
+    fn test_read_a_value() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test")?, Some("test_value".to_string()));
@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn test_04_delete_value() -> Result<(), StorageError> {
+    fn test_delete_value() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test")?, Some("test_value".to_string()));
@@ -393,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn test_05_find_multiple_answers() -> Result<(), StorageError> {
+    fn test_find_multiple_answers() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
         let _ = fs.write("test2", "test_value2");
@@ -415,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn test_06_has_key() -> Result<(), StorageError> {
+    fn test_has_key() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
         assert!(fs.has_key("test1")?);
@@ -425,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn test_07_open_storage() -> Result<(), StorageError> {
+    fn test_open_storage() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
 
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn test_08_open_inexistent_storage() -> Result<(), StorageError> {
+    fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
         let fs = Storage::open(&path);
         assert!(fs.is_err());
@@ -451,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn test_09_keys() -> Result<(), StorageError> {
+    fn test_keys() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
         let _ = fs.write("test2", "test_value2");
@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn test_10_transaction_commit() -> Result<(), StorageError> {
+    fn test_transaction_commit() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)
@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn test_11_transaction_rollback() -> Result<(), StorageError> {
+    fn test_transaction_rollback() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)
@@ -505,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn test_12_transactional_delete() -> Result<(), StorageError> {
+    fn test_transactional_delete() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
         let transaction_id = fs.begin_transaction();
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    fn test_13_non_commited_transactions_should_not_appear() -> Result<(), StorageError> {
+    fn test_non_commited_transactions_should_not_appear() -> Result<(), StorageError> {
         let (path, fs) = create_path_and_storage()?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)
