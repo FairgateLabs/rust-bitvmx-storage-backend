@@ -1,6 +1,6 @@
-use std::{cell::RefCell, collections::HashMap, env, fs, path::PathBuf};
+use std::{cell::RefCell, collections::HashMap, fs, path::PathBuf};
 
-use crate::error::StorageError;
+use crate::{error::StorageError, storage_config::StorageConfig};
 use rocksdb::{SliceTransform, Transaction, TransactionDB};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -38,37 +38,15 @@ pub trait KeyValueStore {
 }
 
 impl Storage {
-    pub fn new() -> Result<Storage, StorageError> {
-        let options = create_options();
-        let default_path = env::current_dir()
-            .map_err(|_| StorageError::PathError)?
-            .join("storage.db");
-        Storage::new_with_path_and_option(&default_path, options)
-    }
-
-    /// Creates a new storage or opens the existing one if present.
-    pub fn new_with_path(path: &PathBuf) -> Result<Storage, StorageError> {
-        let options = create_options();
-        Storage::new_with_path_and_option(path, options)
-    }
-
-    pub fn new_with_options(options: rocksdb::Options) -> Result<Storage, StorageError> {
-        let default_path = env::current_dir()
-            .map_err(|_| StorageError::PathError)?
-            .join("storage.db");
-
-        Storage::new_with_path_and_option(&default_path, options)
-    }
-
-    pub fn new_with_path_and_option(
-        path: &PathBuf,
-        options: rocksdb::Options,
-    ) -> Result<Storage, StorageError> {
+    pub fn new(config: &StorageConfig) -> Result<Storage, StorageError> {
+        let mut options = create_options();
+        options.create_if_missing(true);
         let db = rocksdb::TransactionDB::open(
             &options,
             &rocksdb::TransactionDBOptions::default(),
-            path,
+            config.path.as_str(),
         )?;
+
         Ok(Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
@@ -76,11 +54,20 @@ impl Storage {
     }
 
     pub fn open(path: &PathBuf) -> Result<Storage, StorageError> {
-        let mut options = rocksdb::Options::default();
-        options.set_prefix_extractor(get_prefix_extractor());
-        Storage::new_with_path_and_option(path, options)
+        let options = create_options();
+
+        let db = rocksdb::TransactionDB::open(
+            &options,
+            &rocksdb::TransactionDBOptions::default(),
+            path,
+        )?;
+
+        Ok(Storage {
+            db,
+            transactions: RefCell::new(HashMap::new()),
+        })
     }
-    
+
     pub fn delete_db_files(path: &PathBuf) -> Result<(), StorageError> {
         fs::remove_dir_all(path)?;
         Ok(())
@@ -318,7 +305,6 @@ impl KeyValueStore for Storage {
 
 fn create_options() -> rocksdb::Options {
     let mut options = rocksdb::Options::default();
-    options.create_if_missing(true);
     options.set_prefix_extractor(get_prefix_extractor());
     options
 }
@@ -358,53 +344,63 @@ mod tests {
         dir.join(format!("storage_{}.db", index))
     }
 
-    #[test]
-    fn test_01_new_storage_starts_empty() {
+    fn create_path_and_storage() -> Result<(PathBuf, Storage), StorageError> {
         let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+        let config = StorageConfig {
+            path: path.to_string_lossy().to_string(),
+            password: Some("password".to_string()),
+        };
+        let storage = Storage::new(&config)?;
+
+        Ok((path.clone(), storage))
+    }
+
+    #[test]
+    fn test_01_new_storage_starts_empty() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         assert!(fs.is_empty());
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path).unwrap();
+        Ok(())
     }
 
     #[test]
-    fn test_02_add_value_to_storage() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_02_add_value_to_storage() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path).unwrap();
+        Ok(())
     }
 
     #[test]
-    fn test_03_read_a_value() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_03_read_a_value() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test", "test_value");
-        assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
-        Storage::delete_db_files(path).unwrap();
+        assert_eq!(fs.read("test")?, Some("test_value".to_string()));
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_04_delete_value() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_04_delete_value() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test", "test_value");
-        assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
+        assert_eq!(fs.read("test")?, Some("test_value".to_string()));
         let _ = fs.delete("test");
-        assert_eq!(fs.read("test").unwrap(), None);
-        Storage::delete_db_files(path).unwrap();
+        assert_eq!(fs.read("test")?, None);
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_05_find_multiple_answers() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_05_find_multiple_answers() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
         let _ = fs.write("test2", "test_value2");
         let _ = fs.write("test3", "test_value3");
         let _ = fs.write("tes4", "test_value4");
 
-        let result = fs.partial_compare("test").unwrap();
+        let result = fs.partial_compare("test")?;
         assert_eq!(
             result,
             vec![
@@ -414,23 +410,23 @@ mod tests {
             ]
         );
 
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_06_has_key() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_06_has_key() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
-        assert!(fs.has_key("test1").unwrap());
-        assert!(!fs.has_key("test2").unwrap());
-        Storage::delete_db_files(path).unwrap();
+        assert!(fs.has_key("test1")?);
+        assert!(!fs.has_key("test2")?);
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_07_open_storage() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_07_open_storage() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
 
         drop(fs);
@@ -442,20 +438,21 @@ mod tests {
             Some("test_value1".to_string())
         );
 
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_08_open_inexistent_storage() {
-        let path = temp_storage();
+    fn test_08_open_inexistent_storage() -> Result<(), StorageError> {
+        let path = &temp_storage();
         let fs = Storage::open(&path);
         assert!(fs.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_09_keys() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_09_keys() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
         let _ = fs.write("test2", "test_value2");
         let _ = fs.write("test3", "test_value3");
@@ -468,13 +465,13 @@ mod tests {
         assert!(keys.contains(&"test3".to_string()));
         assert!(keys.contains(&"tes4".to_string()));
 
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_10_transaction_commit() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_10_transaction_commit() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)
             .unwrap();
@@ -486,13 +483,13 @@ mod tests {
         assert_eq!(fs.read("test2").unwrap(), Some("test_value2".to_string()));
         assert_eq!(fs.read("test3").unwrap(), None);
 
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_11_transaction_rollback() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_11_transaction_rollback() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)
             .unwrap();
@@ -503,13 +500,13 @@ mod tests {
         assert_eq!(fs.read("test1").unwrap(), None);
         assert_eq!(fs.read("test2").unwrap(), None);
 
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_12_transactional_delete() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_12_transactional_delete() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let _ = fs.write("test1", "test_value1");
         let transaction_id = fs.begin_transaction();
         fs.transactional_delete("test1", transaction_id).unwrap();
@@ -517,13 +514,13 @@ mod tests {
 
         assert_eq!(fs.read("test1").unwrap(), None);
 
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 
     #[test]
-    fn test_13_non_commited_transactions_should_not_appear() {
-        let path = &temp_storage();
-        let fs = Storage::new_with_path(path).unwrap();
+    fn test_13_non_commited_transactions_should_not_appear() -> Result<(), StorageError> {
+        let (path, fs) = create_path_and_storage()?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)
             .unwrap();
@@ -540,6 +537,7 @@ mod tests {
         assert_eq!(fs.read("test3").unwrap(), None);
         fs.rollback_transaction(transaction_id).unwrap();
 
-        Storage::delete_db_files(path).unwrap();
+        Storage::delete_db_files(&path)?;
+        Ok(())
     }
 }
