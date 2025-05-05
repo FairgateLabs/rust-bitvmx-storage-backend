@@ -1,14 +1,14 @@
-use std::{cell::RefCell, collections::HashMap, fs, path::PathBuf};
-
 use crate::{error::StorageError, storage_config::StorageConfig};
-use rocksdb::{SliceTransform, Transaction, TransactionDB};
+use cocoon::Cocoon;
+use rocksdb::{SliceTransform, TransactionDB};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
+use std::{cell::RefCell, collections::HashMap, fs, io::Cursor, path::PathBuf};
 
 pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<usize, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
-    encrypted: Option<String>,
+    encrypt: Option<String>,
 }
 
 pub trait KeyValueStore {
@@ -63,7 +63,7 @@ impl Storage {
         Ok(Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
-            encrypted: config.encrypted.clone(),
+            encrypt: config.encrypt.clone(),
         })
     }
 
@@ -74,7 +74,8 @@ impl Storage {
 
     pub fn delete(&self, key: &str) -> Result<(), StorageError> {
         let tx = self.db.transaction();
-        delete_with_transaction(key, &tx)?;
+        tx.delete(key.as_bytes())
+            .map_err(|_| StorageError::WriteError)?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
 
         Ok(())
@@ -87,14 +88,16 @@ impl Storage {
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
-        delete_with_transaction(key, tx)?;
+        tx.delete(key.as_bytes())
+            .map_err(|_| StorageError::WriteError)?;
 
         Ok(())
     }
 
     pub fn write(&self, key: &str, value: &str) -> Result<(), StorageError> {
         let tx = self.db.transaction();
-        write_with_transaction(&tx, key, value)?;
+        tx.put(key.as_bytes(), value.as_bytes())
+            .map_err(|_| StorageError::WriteError)?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
 
         Ok(())
@@ -108,7 +111,9 @@ impl Storage {
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
-        write_with_transaction(tx, key, value)?;
+        tx.put(key.as_bytes(), value.as_bytes())
+            .map_err(|_| StorageError::WriteError)?;
+
         Ok(())
     }
 
@@ -209,23 +214,24 @@ impl Storage {
         map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
         Ok(())
     }
-}
 
-fn delete_with_transaction(key: &str, tx: &Transaction<TransactionDB>) -> Result<(), StorageError> {
-    tx.delete(key.as_bytes())
-        .map_err(|_| StorageError::WriteError)?;
+    fn encrypt_entry(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
+        let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+        let mut cocoon = Cocoon::new(self.encrypt.as_ref().unwrap().as_bytes());
+        cocoon
+            .dump(data, &mut entry_cursor)
+            .map_err(|error| StorageError::FailedToEncryptData { error })?;
+        Ok(entry_cursor.into_inner())
+    }
 
-    Ok(())
-}
+    fn decrypt_entry(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
+        let mut entry_cursor = Cursor::new(data);
 
-fn write_with_transaction(
-    tx: &Transaction<TransactionDB>,
-    key: &str,
-    value: &str,
-) -> Result<(), StorageError> {
-    tx.put(key.as_bytes(), value.as_bytes())
-        .map_err(|_| StorageError::WriteError)?;
-    Ok(())
+        let cocoon = Cocoon::new(self.encrypt.as_ref().unwrap().as_bytes());
+        cocoon
+            .parse(&mut entry_cursor)
+            .map_err(|error| StorageError::FailedToDecryptData { error })
+    }
 }
 
 impl KeyValueStore for Storage {
@@ -347,7 +353,7 @@ mod tests {
         let path = &temp_storage();
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            encrypted: Some("password   ".to_string()),
+            encrypt: Some("password   ".to_string()),
         };
         let storage = Storage::new(&config)?;
 
@@ -432,7 +438,7 @@ mod tests {
 
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            encrypted: Some("password".to_string()),
+            encrypt: Some("password".to_string()),
         };
         let fs2 = Storage::open(&config);
         assert!(fs2.is_ok());
@@ -447,7 +453,7 @@ mod tests {
         let path = &temp_storage();
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            encrypted: Some("password".to_string()),
+            encrypt: Some("password".to_string()),
         };
         let fs = Storage::open(&config);
         assert!(fs.is_err());

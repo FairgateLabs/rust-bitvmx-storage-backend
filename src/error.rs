@@ -19,4 +19,8 @@ pub enum StorageError {
     CommitError,
     #[error("Error while eliminating db files: {0}")]
     EliminationError(#[from] IoError),
+    #[error("Failed to encrypt data")]
+    FailedToEncryptData { error: cocoon::Error },
+    #[error("Failed to decrypt data")]
+    FailedToDecryptData { error: cocoon::Error },
 }
