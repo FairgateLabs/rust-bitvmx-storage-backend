@@ -55,7 +55,7 @@ impl Storage {
         options: &rocksdb::Options,
     ) -> Result<Storage, StorageError> {
         let db = rocksdb::TransactionDB::open(
-            &options,
+            options,
             &rocksdb::TransactionDBOptions::default(),
             config.path.as_str(),
         )?;
@@ -389,50 +389,50 @@ mod tests {
 
     #[test]
     fn test_new_storage_starts_empty() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        assert!(fs.is_empty());
+        let (path, _, store) = create_path_and_storage(false)?;
+        assert!(store.is_empty());
         Storage::delete_db_files(&path).unwrap();
         Ok(())
     }
 
     #[test]
     fn test_add_value_to_storage() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let _ = fs.write("test", "test_value");
-        assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
+        let (path, _, store) = create_path_and_storage(false)?;
+        store.write("test", "test_value")?;
+        assert_eq!(store.read("test").unwrap(), Some("test_value".to_string()));
         Storage::delete_db_files(&path).unwrap();
         Ok(())
     }
 
     #[test]
     fn test_read_a_value() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let _ = fs.write("test", "test_value");
-        assert_eq!(fs.read("test")?, Some("test_value".to_string()));
+        let (path, _, store) = create_path_and_storage(false)?;
+        store.write("test", "test_value")?;
+        assert_eq!(store.read("test")?, Some("test_value".to_string()));
         Storage::delete_db_files(&path)?;
         Ok(())
     }
 
     #[test]
     fn test_delete_value() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let _ = fs.write("test", "test_value");
-        assert_eq!(fs.read("test")?, Some("test_value".to_string()));
-        let _ = fs.delete("test");
-        assert_eq!(fs.read("test")?, None);
+        let (path, _, store) = create_path_and_storage(false)?;
+        store.write("test", "test_value")?;
+        assert_eq!(store.read("test")?, Some("test_value".to_string()));
+        store.delete("test")?;
+        assert_eq!(store.read("test")?, None);
         Storage::delete_db_files(&path)?;
         Ok(())
     }
 
     #[test]
     fn test_find_multiple_answers() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let _ = fs.write("test1", "test_value1");
-        let _ = fs.write("test2", "test_value2");
-        let _ = fs.write("test3", "test_value3");
-        let _ = fs.write("tes4", "test_value4");
+        let (path, _, store) = create_path_and_storage(false)?;
+        store.write("test1", "test_value1")?;
+        store.write("test2", "test_value2")?;
+        store.write("test3", "test_value3")?;
+        store.write("tes4", "test_value4")?;
 
-        let result = fs.partial_compare("test")?;
+        let result = store.partial_compare("test")?;
         assert_eq!(
             result,
             vec![
@@ -448,24 +448,27 @@ mod tests {
 
     #[test]
     fn test_has_key() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let _ = fs.write("test1", "test_value1");
-        assert!(fs.has_key("test1")?);
-        assert!(!fs.has_key("test2")?);
+        let (path, _, store) = create_path_and_storage(false)?;
+        store.write("test1", "test_value1")?;
+        assert!(store.has_key("test1")?);
+        assert!(!store.has_key("test2")?);
         Storage::delete_db_files(&path)?;
         Ok(())
     }
 
     #[test]
     fn test_open_storage() -> Result<(), StorageError> {
-        let (path, config, fs) = create_path_and_storage(false)?;
-        let _ = fs.write("test1", "test_value1");
+        let (path, config, store) = create_path_and_storage(false)?;
+        store.write("test1", "test_value1")?;
 
-        drop(fs);
+        drop(store);
 
-        let fs2 = Storage::open(&config);
-        assert!(fs2.is_ok());
-        assert_eq!(fs2.unwrap().read("test1")?, Some("test_value1".to_string()));
+        let open_store = Storage::open(&config);
+        assert!(open_store.is_ok());
+        assert_eq!(
+            open_store.unwrap().read("test1")?,
+            Some("test_value1".to_string())
+        );
 
         Storage::delete_db_files(&path)?;
         Ok(())
@@ -478,20 +481,20 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             encrypt: Some("password".to_string()),
         };
-        let fs = Storage::open(&config);
-        assert!(fs.is_err());
+        let open_store = Storage::open(&config);
+        assert!(open_store.is_err());
         Ok(())
     }
 
     #[test]
     fn test_keys() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let _ = fs.write("test1", "test_value1");
-        let _ = fs.write("test2", "test_value2");
-        let _ = fs.write("test3", "test_value3");
-        let _ = fs.write("tes4", "test_value4");
+        let (path, _, store) = create_path_and_storage(false)?;
+        store.write("test1", "test_value1")?;
+        store.write("test2", "test_value2")?;
+        store.write("test3", "test_value3")?;
+        store.write("tes4", "test_value4")?;
 
-        let keys = fs.keys()?;
+        let keys = store.keys()?;
         assert_eq!(keys.len(), 4);
         assert!(keys.contains(&"test1".to_string()));
         assert!(keys.contains(&"test2".to_string()));
@@ -504,15 +507,15 @@ mod tests {
 
     #[test]
     fn test_transaction_commit() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let transaction_id = fs.begin_transaction();
-        fs.transactional_write("test1", "test_value1", transaction_id)?;
-        fs.transactional_write("test2", "test_value2", transaction_id)?;
-        fs.commit_transaction(transaction_id)?;
+        let (path, _, store) = create_path_and_storage(false)?;
+        let transaction_id = store.begin_transaction();
+        store.transactional_write("test1", "test_value1", transaction_id)?;
+        store.transactional_write("test2", "test_value2", transaction_id)?;
+        store.commit_transaction(transaction_id)?;
 
-        assert_eq!(fs.read("test1")?, Some("test_value1".to_string()));
-        assert_eq!(fs.read("test2")?, Some("test_value2".to_string()));
-        assert_eq!(fs.read("test3")?, None);
+        assert_eq!(store.read("test1")?, Some("test_value1".to_string()));
+        assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
+        assert_eq!(store.read("test3")?, None);
 
         Storage::delete_db_files(&path)?;
         Ok(())
@@ -520,14 +523,14 @@ mod tests {
 
     #[test]
     fn test_transaction_rollback() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let transaction_id = fs.begin_transaction();
-        fs.transactional_write("test1", "test_value1", transaction_id)?;
-        fs.transactional_write("test2", "test_value2", transaction_id)?;
-        fs.rollback_transaction(transaction_id)?;
+        let (path, _, store) = create_path_and_storage(false)?;
+        let transaction_id = store.begin_transaction();
+        store.transactional_write("test1", "test_value1", transaction_id)?;
+        store.transactional_write("test2", "test_value2", transaction_id)?;
+        store.rollback_transaction(transaction_id)?;
 
-        assert_eq!(fs.read("test1")?, None);
-        assert_eq!(fs.read("test2")?, None);
+        assert_eq!(store.read("test1")?, None);
+        assert_eq!(store.read("test2")?, None);
 
         Storage::delete_db_files(&path)?;
         Ok(())
@@ -535,13 +538,13 @@ mod tests {
 
     #[test]
     fn test_transactional_delete() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let _ = fs.write("test1", "test_value1");
-        let transaction_id = fs.begin_transaction();
-        fs.transactional_delete("test1", transaction_id).unwrap();
-        fs.commit_transaction(transaction_id).unwrap();
+        let (path, _, store) = create_path_and_storage(false)?;
+        store.write("test1", "test_value1")?;
+        let transaction_id = store.begin_transaction();
+        store.transactional_delete("test1", transaction_id).unwrap();
+        store.commit_transaction(transaction_id).unwrap();
 
-        assert_eq!(fs.read("test1").unwrap(), None);
+        assert_eq!(store.read("test1").unwrap(), None);
 
         Storage::delete_db_files(&path)?;
         Ok(())
@@ -549,22 +552,48 @@ mod tests {
 
     #[test]
     fn test_non_commited_transactions_should_not_appear() -> Result<(), StorageError> {
-        let (path, _, fs) = create_path_and_storage(false)?;
-        let transaction_id = fs.begin_transaction();
-        fs.transactional_write("test1", "test_value1", transaction_id)
+        let (path, _, store) = create_path_and_storage(false)?;
+        let transaction_id = store.begin_transaction();
+        store
+            .transactional_write("test1", "test_value1", transaction_id)
             .unwrap();
-        fs.transactional_write("test2", "test_value2", transaction_id)
+        store
+            .transactional_write("test2", "test_value2", transaction_id)
             .unwrap();
-        fs.commit_transaction(transaction_id).unwrap();
+        store.commit_transaction(transaction_id).unwrap();
 
-        let second_transaction_id = fs.begin_transaction();
-        fs.transactional_write("test3", "test_value3", second_transaction_id)
+        let second_transaction_id = store.begin_transaction();
+        store
+            .transactional_write("test3", "test_value3", second_transaction_id)
             .unwrap();
 
-        assert_eq!(fs.read("test1").unwrap(), Some("test_value1".to_string()));
-        assert_eq!(fs.read("test2").unwrap(), Some("test_value2".to_string()));
-        assert_eq!(fs.read("test3").unwrap(), None);
-        fs.rollback_transaction(transaction_id).unwrap();
+        assert_eq!(
+            store.read("test1").unwrap(),
+            Some("test_value1".to_string())
+        );
+        assert_eq!(
+            store.read("test2").unwrap(),
+            Some("test_value2".to_string())
+        );
+        assert_eq!(store.read("test3").unwrap(), None);
+        store.rollback_transaction(transaction_id).unwrap();
+
+        Storage::delete_db_files(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_encrypt_and_decrypt() -> Result<(), StorageError> {
+        let (path, _, store) = create_path_and_storage(true)?;
+        store.set("test1", "test_value1", None)?;
+        let data = store.get::<String, String>("test1".to_string())?;
+        assert!(data.is_some());
+        assert_eq!(data.unwrap(), "test_value1");
+
+        store.set("test1", "test_value2", None)?;
+        let data = store.get::<String, String>("test1".to_string())?;
+        assert!(data.is_some());
+        assert_eq!(data.unwrap(), "test_value2");
 
         Storage::delete_db_files(&path)?;
         Ok(())
