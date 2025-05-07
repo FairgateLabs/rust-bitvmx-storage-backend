@@ -96,7 +96,13 @@ impl Storage {
 
     pub fn write(&self, key: &str, value: &str) -> Result<(), StorageError> {
         let tx = self.db.transaction();
-        tx.put(key.as_bytes(), value.as_bytes())
+        let mut data = value.as_bytes().to_vec();
+
+        if self.encrypt.is_some() {
+            data = self.encrypt_data(data)?
+        }
+
+        tx.put(key.as_bytes(), data)
             .map_err(|_| StorageError::WriteError)?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
 
@@ -111,7 +117,13 @@ impl Storage {
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
-        tx.put(key.as_bytes(), value.as_bytes())
+        let mut data = value.as_bytes().to_vec();
+
+        if self.encrypt.is_some() {
+            data = self.encrypt_data(data)?
+        }
+
+        tx.put(key.as_bytes(), data)
             .map_err(|_| StorageError::WriteError)?;
 
         Ok(())
@@ -119,9 +131,15 @@ impl Storage {
 
     pub fn read(&self, key: &str) -> Result<Option<String>, StorageError> {
         match self.db.get(key.as_bytes()) {
-            Ok(Some(value)) => Ok(Some(
-                String::from_utf8(value).map_err(|_| StorageError::ConversionError)?,
-            )),
+            Ok(Some(mut data)) => {
+                if self.encrypt.is_some() {
+                    data = self.decrypt_data(data)?;
+                }
+
+                let data_ret =
+                    String::from_utf8(data).map_err(|_| StorageError::ConversionError)?;
+                Ok(Some(data_ret))
+            }
             Ok(None) => Ok(None),
             Err(_) => Err(StorageError::ReadError),
         }
@@ -215,7 +233,7 @@ impl Storage {
         Ok(())
     }
 
-    fn encrypt_entry(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
+    fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
         let mut cocoon = Cocoon::new(self.encrypt.as_ref().unwrap().as_bytes());
         cocoon
@@ -224,7 +242,7 @@ impl Storage {
         Ok(entry_cursor.into_inner())
     }
 
-    fn decrypt_entry(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
+    fn decrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let mut entry_cursor = Cursor::new(data);
 
         let cocoon = Cocoon::new(self.encrypt.as_ref().unwrap().as_bytes());
@@ -349,20 +367,29 @@ mod tests {
         dir.join(format!("storage_{}.db", index))
     }
 
-    fn create_path_and_storage() -> Result<(PathBuf, Storage), StorageError> {
+    fn create_path_and_storage(
+        is_encrypted: bool,
+    ) -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
         let path = &temp_storage();
+
+        let encrypt = if is_encrypted {
+            Some("password".to_string())
+        } else {
+            None
+        };
+
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            encrypt: Some("password   ".to_string()),
+            encrypt,
         };
         let storage = Storage::new(&config)?;
 
-        Ok((path.clone(), storage))
+        Ok((path.clone(), config, storage))
     }
 
     #[test]
     fn test_new_storage_starts_empty() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         assert!(fs.is_empty());
         Storage::delete_db_files(&path).unwrap();
         Ok(())
@@ -370,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_add_value_to_storage() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test").unwrap(), Some("test_value".to_string()));
         Storage::delete_db_files(&path).unwrap();
@@ -379,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_read_a_value() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test")?, Some("test_value".to_string()));
         Storage::delete_db_files(&path)?;
@@ -388,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_delete_value() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let _ = fs.write("test", "test_value");
         assert_eq!(fs.read("test")?, Some("test_value".to_string()));
         let _ = fs.delete("test");
@@ -399,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_find_multiple_answers() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let _ = fs.write("test1", "test_value1");
         let _ = fs.write("test2", "test_value2");
         let _ = fs.write("test3", "test_value3");
@@ -421,7 +448,7 @@ mod tests {
 
     #[test]
     fn test_has_key() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let _ = fs.write("test1", "test_value1");
         assert!(fs.has_key("test1")?);
         assert!(!fs.has_key("test2")?);
@@ -431,15 +458,11 @@ mod tests {
 
     #[test]
     fn test_open_storage() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, config, fs) = create_path_and_storage(false)?;
         let _ = fs.write("test1", "test_value1");
 
         drop(fs);
 
-        let config = StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            encrypt: Some("password".to_string()),
-        };
         let fs2 = Storage::open(&config);
         assert!(fs2.is_ok());
         assert_eq!(fs2.unwrap().read("test1")?, Some("test_value1".to_string()));
@@ -462,7 +485,7 @@ mod tests {
 
     #[test]
     fn test_keys() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let _ = fs.write("test1", "test_value1");
         let _ = fs.write("test2", "test_value2");
         let _ = fs.write("test3", "test_value3");
@@ -481,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_transaction_commit() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)?;
         fs.transactional_write("test2", "test_value2", transaction_id)?;
@@ -497,7 +520,7 @@ mod tests {
 
     #[test]
     fn test_transaction_rollback() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)?;
         fs.transactional_write("test2", "test_value2", transaction_id)?;
@@ -512,7 +535,7 @@ mod tests {
 
     #[test]
     fn test_transactional_delete() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let _ = fs.write("test1", "test_value1");
         let transaction_id = fs.begin_transaction();
         fs.transactional_delete("test1", transaction_id).unwrap();
@@ -526,7 +549,7 @@ mod tests {
 
     #[test]
     fn test_non_commited_transactions_should_not_appear() -> Result<(), StorageError> {
-        let (path, fs) = create_path_and_storage()?;
+        let (path, _, fs) = create_path_and_storage(false)?;
         let transaction_id = fs.begin_transaction();
         fs.transactional_write("test1", "test_value1", transaction_id)
             .unwrap();
