@@ -357,13 +357,13 @@ pub fn get_prefix_extractor() -> SliceTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{thread_rng, RngCore};
+    use rand::{rng, RngCore};
     use std::env;
 
     fn temp_storage() -> PathBuf {
         let dir = env::temp_dir();
-        let mut rng = thread_rng();
-        let index = rng.next_u32();
+        let mut rang = rng();
+        let index = rang.next_u32();
         dir.join(format!("storage_{}.db", index))
     }
 
