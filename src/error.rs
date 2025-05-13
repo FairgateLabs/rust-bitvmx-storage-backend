@@ -1,5 +1,5 @@
-use thiserror::Error;
 use std::io::Error as IoError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
@@ -15,10 +15,12 @@ pub enum StorageError {
     SerializationError,
     #[error("Error creating storage")]
     CreationError(#[from] rocksdb::Error),
-    #[error("Error with the path")]
-    PathError,
     #[error("Error while commiting changes")]
     CommitError,
     #[error("Error while eliminating db files: {0}")]
     EliminationError(#[from] IoError),
+    #[error("Failed to encrypt data")]
+    FailedToEncryptData { error: cocoon::Error },
+    #[error("Failed to decrypt data")]
+    FailedToDecryptData { error: cocoon::Error },
 }

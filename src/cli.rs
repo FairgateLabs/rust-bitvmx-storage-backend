@@ -1,4 +1,4 @@
-use crate::storage::Storage;
+use crate::{storage::Storage, storage_config::StorageConfig};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -74,16 +74,29 @@ impl Action {
 pub fn run(args: Cli) -> Result<(), String> {
     let storage = match args.action {
         Action::New(storage_path) => {
-            Storage::new_with_path(&storage_path.storage_path).map_err(|e| e.to_string())?;
+            let path = storage_path.storage_path.to_string_lossy().to_string();
+            let config = StorageConfig::new(path, None);
+
+            Storage::new(&config).map_err(|e| e.to_string())?;
             println!("Created new storage at {:?}", storage_path.storage_path);
             return Ok(());
         }
-        _ => Storage::open(args.action.get_storage_path()).map_err(|e| e.to_string())?,
+        _ => {
+            let config = StorageConfig::new(
+                args.action.get_storage_path().to_string_lossy().to_string(),
+                None,
+            );
+            Storage::open(&config).map_err(|e| e.to_string())?
+        }
     };
 
     match args.action {
         Action::New(storage_path) => {
-            Storage::new_with_path(&storage_path.storage_path).map_err(|e| e.to_string())?;
+            let config = StorageConfig::new(
+                storage_path.storage_path.to_string_lossy().to_string(),
+                None,
+            );
+            Storage::new(&config).map_err(|e| e.to_string())?;
             println!("Created new storage at {:?}", storage_path.storage_path);
         }
         Action::Write(storage_key_value) => {
