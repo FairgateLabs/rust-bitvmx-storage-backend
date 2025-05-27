@@ -27,7 +27,7 @@ pub trait KeyValueStore {
         K: AsRef<str>,
         V: Serialize;
 
-    fn update<K, V>(
+    /*fn update<K, V>(
         &self,
         id: K,
         updates: &HashMap<&str, Value>,
@@ -35,7 +35,7 @@ pub trait KeyValueStore {
     ) -> Result<V, StorageError>
     where
         K: AsRef<str> + std::marker::Copy,
-        V: Serialize + DeserializeOwned + Clone;
+        V: Serialize + DeserializeOwned + Clone;*/
 }
 
 impl Storage {
@@ -94,6 +94,20 @@ impl Storage {
         Ok(())
     }
 
+    pub fn write_vec(&self, key: &str, mut data: Vec<u8>) -> Result<(), StorageError> {
+        let tx = self.db.transaction();
+        //let mut data = value.as_bytes().to_vec();
+
+        if self.encrypt.is_some() {
+            data = self.encrypt_data(data)?
+        }
+
+        tx.put(key.as_bytes(), data)
+            .map_err(|_| StorageError::WriteError)?;
+        tx.commit().map_err(|_| StorageError::CommitError)?;
+
+        Ok(())
+    }
     pub fn write(&self, key: &str, value: &str) -> Result<(), StorageError> {
         let tx = self.db.transaction();
         let mut data = value.as_bytes().to_vec();
@@ -105,6 +119,25 @@ impl Storage {
         tx.put(key.as_bytes(), data)
             .map_err(|_| StorageError::WriteError)?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
+
+        Ok(())
+    }
+
+    pub fn transactional_write_vec(
+        &self,
+        key: &str,
+        mut data: Vec<u8>,
+        transaction_id: usize,
+    ) -> Result<(), StorageError> {
+        let mut map = self.transactions.borrow_mut();
+        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+
+        if self.encrypt.is_some() {
+            data = self.encrypt_data(data)?
+        }
+
+        tx.put(key.as_bytes(), data)
+            .map_err(|_| StorageError::WriteError)?;
 
         Ok(())
     }
@@ -129,16 +162,16 @@ impl Storage {
         Ok(())
     }
 
-    pub fn read(&self, key: &str) -> Result<Option<String>, StorageError> {
+    pub fn read(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
         match self.db.get(key.as_bytes()) {
             Ok(Some(mut data)) => {
                 if self.encrypt.is_some() {
                     data = self.decrypt_data(data)?;
                 }
 
-                let data_ret =
-                    String::from_utf8(data).map_err(|_| StorageError::ConversionError)?;
-                Ok(Some(data_ret))
+                //let data_ret =
+                //    String::from_utf8(data).map_err(|_| StorageError::ConversionError)?;
+                Ok(Some(data))
             }
             Ok(None) => Ok(None),
             Err(_) => Err(StorageError::ReadError),
@@ -155,7 +188,8 @@ impl Storage {
         let mut result = Vec::new();
         let mut iter = self.db.iterator(rocksdb::IteratorMode::Start);
         while let Some(Ok((k, _))) = iter.next() {
-            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            let k = String::from_utf8(k.to_vec())
+                .map_err(|_| StorageError::ConversionError("key_name".to_string()))?;
             result.push(k);
         }
         Ok(result)
@@ -168,7 +202,8 @@ impl Storage {
             rocksdb::Direction::Forward,
         ));
         while let Some(Ok((k, _))) = iter.next() {
-            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            let k = String::from_utf8(k.to_vec())
+                .map_err(|_| StorageError::ConversionError("key_name".to_string()))?;
             if k.starts_with(key) {
                 result.push(k);
             } else {
@@ -179,17 +214,18 @@ impl Storage {
         Ok(result)
     }
 
-    pub fn partial_compare(&self, key: &str) -> Result<Vec<(String, String)>, StorageError> {
+    pub fn partial_compare(&self, key: &str) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
         let mut result = Vec::new();
         let mut iter = self.db.iterator(rocksdb::IteratorMode::From(
             key.as_bytes(),
             rocksdb::Direction::Forward,
         ));
         while let Some(Ok((k, v))) = iter.next() {
-            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-            let v = String::from_utf8(v.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            let k = String::from_utf8(k.to_vec())
+                .map_err(|_| StorageError::ConversionError("key_name".to_string()))?;
+            //let v = String::from_utf8(v.to_vec()).map_err(|_| StorageError::ConversionError)?;
             if k.starts_with(key) {
-                result.push((k, v));
+                result.push((k, v.to_vec()));
             } else {
                 break;
             }
@@ -264,7 +300,9 @@ impl KeyValueStore for Storage {
         match value {
             Some(value) => {
                 let value =
-                    serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
+                    //serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
+                    bincode::deserialize(&value)
+                        .map_err(|_| StorageError::ConversionError(key.to_string()))?;
                 Ok(Some(value))
             }
             None => Ok(None),
@@ -277,15 +315,17 @@ impl KeyValueStore for Storage {
         V: Serialize,
     {
         let key = key.as_ref();
-        let value = serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
+        let value = bincode::serialize(&value).map_err(|_| StorageError::SerializationError)?;
+
+        //serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
 
         match transaction_id {
-            Some(id) => Ok(self.transactional_write(key, &value, id)?),
-            None => Ok(self.write(key, &value)?),
+            Some(id) => Ok(self.transactional_write_vec(key, value, id)?),
+            None => Ok(self.write_vec(key, value)?),
         }
     }
 
-    fn update<K, V>(
+    /*fn update<K, V>(
         &self,
         id: K,
         updates: &HashMap<&str, Value>,
@@ -323,7 +363,7 @@ impl KeyValueStore for Storage {
         } else {
             Err(StorageError::NotFound)
         }
-    }
+    }*/
 }
 
 fn create_options() -> rocksdb::Options {

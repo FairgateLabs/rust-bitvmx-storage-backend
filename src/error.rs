@@ -9,8 +9,8 @@ pub enum StorageError {
     WriteError,
     #[error("Error reading from storage")]
     ReadError,
-    #[error("Error converting data")]
-    ConversionError,
+    #[error("Error converting data {0}")]
+    ConversionError(String),
     #[error("Error serializing/deserializing data")]
     SerializationError,
     #[error("Error creating storage")]

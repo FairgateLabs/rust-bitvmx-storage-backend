@@ -114,7 +114,7 @@ pub fn run(args: Cli) -> Result<(), String> {
                 .map_err(|e| e.to_string())?
             {
                 Some(value) => println!(
-                    "Read key {} with value {} from {:?}",
+                    "Read key {} with value {:?} from {:?}",
                     storage_and_key.key, value, storage_and_key.storage_path
                 ),
                 None => println!(
@@ -167,11 +167,11 @@ pub fn run(args: Cli) -> Result<(), String> {
             let keys = storage.keys().map_err(|e| e.to_string())?;
             let mut json_map = serde_json::Map::new();
             for key in keys {
-                if let Some(value) = storage.read(&key).map_err(|e| e.to_string())? {
+                /*if let Some(value) = storage.read(&key).map_err(|e| e.to_string())? {
                     let json_value: serde_json::Value =
                         serde_json::from_str(&value).map_err(|e| e.to_string())?;
                     json_map.insert(key, json_value);
-                }
+                }*/
             }
             println!("Dumped storage content to {:?}", dump_file);
             let json_data = serde_json::Value::Object(json_map);
