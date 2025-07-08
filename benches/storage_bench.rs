@@ -1,36 +1,26 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{thread_rng, RngCore};
-use rocksdb::Options;
+use rand::{rng, RngCore};
 use std::{env, fs, path::PathBuf, time::Duration};
-use storage_backend::storage::{get_prefix_extractor, Storage};
+use storage_backend::{storage::Storage, storage_config::StorageConfig};
 
 fn temp_storage() -> PathBuf {
     let dir = env::temp_dir();
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let index = rng.next_u32();
     dir.join(format!("storage_{}.db", index))
 }
 
 fn setup_database_with_prefix_extractor(storage_path: &PathBuf) -> Storage {
-    let mut opts = Options::default();
-    opts.create_if_missing(true);
-    opts.set_prefix_extractor(get_prefix_extractor());
-
-    let db = Storage::new_with_path_and_option(storage_path, opts).unwrap();
-
+    let storage_config = StorageConfig::new(storage_path.to_string_lossy().to_string(), None);
+    let db = Storage::new(&storage_config).unwrap();
     write_data(&db);
-
     db
 }
 
 fn setup_database_without_prefix_extractor(storage_path: &PathBuf) -> Storage {
-    let mut opts = Options::default();
-    opts.create_if_missing(true);
-
-    let db = Storage::new_with_path_and_option(storage_path, opts).unwrap();
-
+    let storage_config = StorageConfig::new(storage_path.to_string_lossy().to_string(), None);
+    let db = Storage::new(&storage_config).unwrap();
     write_data(&db);
-
     db
 }
 
@@ -64,7 +54,7 @@ fn access_key_benchmark(
 
 fn random_keys(n: usize) -> Vec<String> {
     let mut keys = Vec::with_capacity(n);
-    let mut rng = thread_rng();
+    let mut rng = rng();
 
     for _ in 0..n {
         let mut key;

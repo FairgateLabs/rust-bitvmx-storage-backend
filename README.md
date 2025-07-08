@@ -1,4 +1,4 @@
-# rust-bitvmx-storage-backend
+# Rust BitVMX Storage Backend
 A Rust library for managing storage for BitVMX 
 
 The project relies on Clang for compiling certain C/C++ code. Install Clang on your system:

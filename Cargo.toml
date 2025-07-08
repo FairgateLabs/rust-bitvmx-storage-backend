@@ -2,6 +2,12 @@
 name = "rust-bitvmx-storage-backend"
 version = "0.1.1"
 edition = "2021"
+description = "Rust BitVMX Storage Backend"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/FairgateLabs/rust-bitvmx-storage-backend"
+categories = ["database", "storage"]
+keywords = ["rust", "storage", "backend", "BitVMX", "database", "RocksDB"]
 
 [lib]
 name = "storage_backend"
@@ -15,8 +21,8 @@ thiserror = "2.0.12"
 uuid = { version = "1.10.0", features = ["v4"] }
 cocoon = "0.4.2"
 [dev-dependencies]
-criterion = "0.5.1"
-rand = "0.9.0"
+criterion = "0.6.0"
+rand = "0.9.1"
 
 [[bench]]
 name = "storage_bench"
