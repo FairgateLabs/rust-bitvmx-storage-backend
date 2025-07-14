@@ -1,215 +1,158 @@
-# Rust BitVMX Storage Backend
+# BitVMX Storage Backend
 A Rust library for managing storage for BitVMX 
 
-The project relies on Clang for compiling certain C/C++ code. Install Clang on your system:
+## Installation
 
-- **Windows**: Download and install [LLVM](https://llvm.org/releases/download.html) or use **MSYS2**:
-  ```bash
-  pacman -S mingw-w64-x86_64-clang
-  ```
-- **Linux**: Install Clang via your package manager:
-    ```bash
-  sudo apt install clang
-  ```
+For detailed installation instructions, environment setup, and troubleshooting, please see the [Installation Guide](INSTALLATION.md).
 
-- **macOS**: Clang comes pre-installed with Xcode or can be installed via Homebrew:
-  ```bash
-  brew install llvm
-  ```
+The installation guide covers:
+- Installing RocksDB, Clang (LLVM), and compression libraries
+- Setting up environment variables for macOS, Linux, and Windows
+- VS Code integration for rust-analyzer
+- Common troubleshooting issues and solutions
 
-Ensure the following environment variables are set:
-```bash
-# On Windows
-set CC=clang
-set CXX=clang++
-set AR=llvm-ar
 
-# On Unix-like systems
-export CC=clang
-export CXX=clang++
-export AR=llvm-ar
-```
+## Methods Overview
+The `Storage` struct in `src/storage.rs` provides a comprehensive set of methods for managing a key-value store with optional encryption and transaction support. Below is a summary of the key methods available:
 
-# Avoid recompiling RocksDB library with every change.
+- **new**: Creates a new `Storage` instance with the specified configuration, initializing the database.
 
-This guide explains how to install **RocksDB, Clang (LLVM), and compression libraries** for Rust development across **macOS, Linux, and Windows** to avoid triggering the RocksDB custom build that rebuilds the RocksDB library with every change. It also includes **environment variable setup** and **VS Code integration** to ensure `rust-analyzer` works correctly.
+- **open**: Opens an existing `Storage` instance using the provided configuration.
 
----
+- **write**: Writes a key-value pair to the database, with optional encryption.
 
-## **1. Install Required Libraries**
-You need:
-- **RocksDB** (for database storage)
-- **LLVM & Clang** (for Rust bindings)
-- **Compression Libraries** (Bzip2, LZ4, ZSTD, Snappy, Zlib)
+- **read**: Reads a value associated with a key from the database, decrypting if necessary.
 
-### **macOS (Apple Silicon & Intel)**
-```sh
-brew install rocksdb llvm bzip2 lz4 zstd snappy zlib
-```
+- **set**: Sets a key-value pair in the database, with optional transaction support.
 
-### **Linux (Debian/Ubuntu)**
-```sh
-sudo apt update
-sudo apt install -y librocksdb-dev llvm-dev libclang-dev bzip2 liblz4-dev libzstd-dev libsnappy-dev zlib1g-dev
-```
+- **get**: Retrieves a value associated with a key from the database, deserializing it into the specified type.
 
-### **Windows (Using vcpkg)**
-```sh
-vcpkg install rocksdb:x64-windows
-vcpkg install llvm:x64-windows
-vcpkg install bzip2 lz4 zstd snappy zlib:x64-windows
-```
+- **delete**: Deletes a key-value pair from the database.
 
----
+- **is_empty**: Checks if the database is empty.
 
-## **2. Set Environment Variables**
-### **macOS**
-```sh
-export LIBCLANG_PATH="/opt/homebrew/opt/llvm/lib"
-export DYLD_LIBRARY_PATH="/opt/homebrew/opt/llvm/lib"
-export ROCKSDB_LIB_DIR="/opt/homebrew/lib"
-export ROCKSDB_INCLUDE_DIR="/opt/homebrew/include"
-```
-Make it permanent:
-```sh
-echo 'export LIBCLANG_PATH="/opt/homebrew/opt/llvm/lib"' >> ~/.zshrc
-echo 'export DYLD_LIBRARY_PATH="/opt/homebrew/opt/llvm/lib"' >> ~/.zshrc
-echo 'export ROCKSDB_LIB_DIR="/opt/homebrew/lib"' >> ~/.zshrc
-echo 'export ROCKSDB_INCLUDE_DIR="/opt/homebrew/include"' >> ~/.zshrc
-source ~/.zshrc
-```
+- **has_key**: Checks if a key exists in the database.
 
-### **Linux**
-```sh
-export LIBCLANG_PATH="/usr/lib/llvm-12/lib"
-export LD_LIBRARY_PATH="/usr/lib/llvm-12/lib"
-export ROCKSDB_LIB_DIR="/usr/lib"
-export ROCKSDB_INCLUDE_DIR="/usr/include"
-```
-Make it permanent:
-```sh
-echo 'export LIBCLANG_PATH="/usr/lib/llvm-12/lib"' >> ~/.bashrc
-echo 'export LD_LIBRARY_PATH="/usr/lib/llvm-12/lib"' >> ~/.bashrc
-echo 'export ROCKSDB_LIB_DIR="/usr/lib"' >> ~/.bashrc
-echo 'export ROCKSDB_INCLUDE_DIR="/usr/include"' >> ~/.bashrc
-source ~/.bashrc
-```
+- **keys**: Retrieves all keys from the database.
 
-### **Windows (PowerShell)**
-```powershell
-$env:LIBCLANG_PATH="C:\vcpkg\installed\x64-windows\lib"
-$env:ROCKSDB_LIB_DIR="C:\vcpkg\installed\x64-windows\lib"
-$env:ROCKSDB_INCLUDE_DIR="C:\vcpkg\installed\x64-windows\include"
-```
-Make it permanent:
-```powershell
-[System.Environment]::SetEnvironmentVariable("LIBCLANG_PATH", "C:\\vcpkg\\installed\\x64-windows\\lib", "User")
-[System.Environment]::SetEnvironmentVariable("ROCKSDB_LIB_DIR", "C:\\vcpkg\\installed\\x64-windows\\lib", "User")
-[System.Environment]::SetEnvironmentVariable("ROCKSDB_INCLUDE_DIR", "C:\\vcpkg\\installed\\x64-windows\\include", "User")
-```
-Then restart your terminal.
+- **partial_compare_keys**: Retrieves keys that start with the specified prefix.
 
----
+- **partial_compare**: Retrieves key-value pairs where keys start with the specified prefix.
 
-## **3. Optional Environment Variables**
-These variables are not required for Rust development but may be needed in certain cases.
+- **begin_transaction**: Begins a new transaction and returns its ID.
 
-### **macOS**
-To make these changes permanent, add them to `~/.zshrc`:
-```sh
-# clang or other LLVM tools
-echo 'export PATH="/opt/homebrew/opt/llvm/bin:$PATH"' >> ~/.zshrc
+- **commit_transaction**: Commits the specified transaction.
 
-# LDFLAGS and CPPFLAGS for compilation
-echo 'export LDFLAGS="-L/opt/homebrew/opt/llvm/lib"' >> ~/.zshrc
-echo 'export CPPFLAGS="-I/opt/homebrew/opt/llvm/include"' >> ~/.zshrc
+- **rollback_transaction**: Rolls back the specified transaction.
 
-# Bzip2 paths
-echo 'export PATH="/opt/homebrew/opt/bzip2/bin:$PATH"' >> ~/.zshrc
-echo 'export LDFLAGS="-L/opt/homebrew/opt/bzip2/lib"' >> ~/.zshrc
-source ~/.zshrc
-```
+- **transactional_write**: Writes a key-value pair within a transaction, with optional encryption.
 
-### **Linux**
-For Linux, add them to `~/.bashrc`:
-```sh
-# clang or other LLVM tools
-echo 'export PATH="/usr/lib/llvm-12/bin:$PATH"' >> ~/.bashrc
-echo 'export LDFLAGS="-L/usr/lib/llvm-12/lib"' >> ~/.bashrc
+- **transactional_delete**: Deletes a key-value pair within a transaction.
 
-# LDFLAGS and CPPFLAGS for compilation
-echo 'export CPPFLAGS="-I/usr/include/llvm-12"' >> ~/.bashrc
-echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
+- **delete_db_files**: Deletes all database files at the specified path.
 
-### **Windows (PowerShell)**
-For Windows, set these variables permanently:
-```powershell
-[System.Environment]::SetEnvironmentVariable("PATH", "C:\\vcpkg\\installed\\x64-windows\\bin;" + $env:PATH, "User")
-[System.Environment]::SetEnvironmentVariable("LDFLAGS", "-L C:\\vcpkg\\installed\\x64-windows\\lib", "User")
-[System.Environment]::SetEnvironmentVariable("CPPFLAGS", "-I C:\\vcpkg\\installed\\x64-windows\\include", "User")
-```
-Then restart your terminal.
+## Usage
 
----
+To use the `Storage` struct for managing a key-value store, follow these steps:
 
-## **4. Ensure VS Code Uses These Variables**
-VS Code does **not** inherit terminal environment variables by default.
+1. **Create a StorageConfig**: 
+   Define the path for your database and specify whether encryption is needed.
 
-### **Option 1: Open VS Code from Terminal**
-```sh
-code .
-```
-This **inherits your environment**.
+   ```rust
+   let config = StorageConfig::new("path/to/database".to_string(), Some("encryption_key".to_string()));
+   ```
 
-### **Option 2: Set `rust-analyzer` Environment in VS Code**
-1. **Open VS Code**  
-2. **Go to** `Settings` (Cmd + ,)  
-3. **Search for** `rust-analyzer.server.extraEnv`  
-4. **Click "Edit in settings.json"**  
-5. **Add:**
-```json
-"rust-analyzer.server.extraEnv": {
-    "LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
-    "DYLD_LIBRARY_PATH": "/opt/homebrew/opt/llvm/lib",
-    "ROCKSDB_LIB_DIR": "/opt/homebrew/lib",
-    "ROCKSDB_INCLUDE_DIR": "/opt/homebrew/include"
-}
-```
-6. **Restart VS Code**  
+2. **Initialize Storage**:
+   Create a new `Storage` instance using the configuration.
 
-### **Option 3: Use `launchctl` for macOS (System-Wide Fix)**
-```sh
-launchctl setenv LIBCLANG_PATH /opt/homebrew/opt/llvm/lib
-launchctl setenv DYLD_LIBRARY_PATH /opt/homebrew/opt/llvm/lib
-launchctl setenv ROCKSDB_LIB_DIR /opt/homebrew/lib
-launchctl setenv ROCKSDB_INCLUDE_DIR /opt/homebrew/include
-```
-Then restart VS Code.
+   ```rust
+   let storage = Storage::new(&config);
+   ```
 
----
+3. **Perform Operations**:
+   Use the available methods to interact with the database.
 
-## **5. Debugging Common Issues**
-### **Problem: `libclang.dylib` Not Found in VS Code**
-**Fix:**  
-- Open VS Code from the terminal (`code .`)
-- Add `rust-analyzer.server.extraEnv` in VS Code settings.
-- Use `launchctl` on macOS to set env vars system-wide.
+   - **Write Data**:
+     ```rust
+     storage.write("key", "value");
+     ```
 
-### **Problem: `dyld: Library not loaded: @rpath/libclang.dylib`**
-**Fix:**  
-```sh
-sudo install_name_tool -add_rpath /opt/homebrew/opt/llvm/lib $(which rustc)
-sudo install_name_tool -add_rpath /opt/homebrew/opt/llvm/lib $(which cargo)
-```
-Then check:
-```sh
-otool -L $(which rustc)
-otool -L $(which cargo)
-```
+   - **Read Data**:
+     ```rust
+     let value = storage.read("key");
+     ```
 
-### **Problem: RocksDB Compilation Fails**
-**Fix:**  
-- Ensure `ROCKSDB_LIB_DIR` and `ROCKSDB_INCLUDE_DIR` are set correctly.
-- Manually link missing compression libraries (`bzip2, lz4, zstd, snappy, zlib`).
+   - **Get and Set Key-Value Pairs**:
+     Use generic methods to get and set key-value pairs.
+
+     ```rust
+     let value: Option<YourType> = storage.get("key")?;
+     storage.set("key", value, None)?;
+     ```
+
+   - **Delete Data**:
+     ```rust
+     storage.delete("key");
+     ```
+
+   - **Update Data**:
+     Update an existing value with new data.
+
+     ```rust
+     let updates = HashMap::new();
+     updates.insert("field", serde_json::json!("new_value"));
+     let updated_value: YourType = storage.update("key", &updates, None)?;
+     ```
+
+   - **Check Key Existence**:
+     Verify if a specific key exists in the database.
+
+     ```rust
+     let exists = storage.has_key("key")?;
+     ```
+
+4. **Check Database State**:
+   Verify if the database is empty or retrieve keys.
+
+   ```rust
+   if storage.is_empty() {
+   } else {
+       let keys = storage.keys();
+   }
+   ```
+
+
+5. **Transaction Management**:
+     Begin a transaction, perform operations, and commit or rollback as needed.
+
+     ```rust
+     let transaction_id = storage.begin_transaction();
+     storage.transactional_write("key", "value", transaction_id);
+     storage.transactional_delete("key", transaction_id)?;
+     storage.commit_transaction(transaction_id)?;
+     storage.rollback_transaction(transaction_id)?;
+     ```
+
+6. **Advanced Operations**:
+
+   - **Partial Key Comparison**:
+     Retrieve keys or key-value pairs that start with a specific prefix.
+
+     ```rust
+     let keys_with_prefix = storage.partial_compare_keys("prefix")?;
+     let key_value_pairs = storage.partial_compare("prefix")?;
+     ```
+
+   - **Open Existing Storage**:
+     Open an existing storage instance.
+
+     ```rust
+     let open_storage = Storage::open(&config)?;
+     ```
+
+   - **Delete Database Files**:
+     Remove all database files at a specified path.
+
+     ```rust
+     Storage::delete_db_files(&PathBuf::from("path/to/database"))?;
+     ```
