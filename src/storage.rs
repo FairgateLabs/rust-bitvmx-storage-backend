@@ -3,11 +3,12 @@ use cocoon::Cocoon;
 use rocksdb::{SliceTransform, TransactionDB};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 use std::{cell::RefCell, collections::HashMap, fs, io::Cursor, path::PathBuf};
 
 pub struct Storage {
     db: rocksdb::TransactionDB,
-    transactions: RefCell<HashMap<usize, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
+    transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
     encrypt: Option<String>,
 }
 
@@ -21,7 +22,7 @@ pub trait KeyValueStore {
         &self,
         key: K,
         value: V,
-        transaction_id: Option<usize>,
+        transaction_id: Option<Uuid>,
     ) -> Result<(), StorageError>
     where
         K: AsRef<str>,
@@ -31,7 +32,7 @@ pub trait KeyValueStore {
         &self,
         id: K,
         updates: &HashMap<&str, Value>,
-        transaction_id: Option<usize>,
+        transaction_id: Option<Uuid>,
     ) -> Result<V, StorageError>
     where
         K: AsRef<str> + std::marker::Copy,
@@ -84,7 +85,7 @@ impl Storage {
     pub fn transactional_delete(
         &self,
         key: &str,
-        transaction_id: usize,
+        transaction_id: Uuid,
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
@@ -113,7 +114,7 @@ impl Storage {
         &self,
         key: &str,
         value: &str,
-        transaction_id: usize,
+        transaction_id: Uuid,
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
@@ -206,10 +207,10 @@ impl Storage {
         Ok(result.is_some())
     }
 
-    pub fn begin_transaction(&self) -> usize {
+    pub fn begin_transaction(&self) -> Uuid {
         let transaction = self.db.transaction();
         let mut map = self.transactions.borrow_mut();
-        let id = map.len() + 1;
+        let id = Uuid::new_v4();
         map.insert(
             id,
             Box::new(unsafe {
@@ -219,7 +220,7 @@ impl Storage {
         id
     }
 
-    pub fn commit_transaction(&self, transaction_id: usize) -> Result<(), StorageError> {
+    pub fn commit_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         let tx = map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
@@ -227,7 +228,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn rollback_transaction(&self, transaction_id: usize) -> Result<(), StorageError> {
+    pub fn rollback_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
         Ok(())
@@ -271,7 +272,7 @@ impl KeyValueStore for Storage {
         }
     }
 
-    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<usize>) -> Result<(), StorageError>
+    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<Uuid>) -> Result<(), StorageError>
     where
         K: AsRef<str>,
         V: Serialize,
@@ -289,7 +290,7 @@ impl KeyValueStore for Storage {
         &self,
         id: K,
         updates: &HashMap<&str, Value>,
-        transaction_id: Option<usize>,
+        transaction_id: Option<Uuid>,
     ) -> Result<V, StorageError>
     where
         K: AsRef<str> + std::marker::Copy,
