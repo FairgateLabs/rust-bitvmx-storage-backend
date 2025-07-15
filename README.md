@@ -156,3 +156,10 @@ To use the `Storage` struct for managing a key-value store, follow these steps:
      ```rust
      Storage::delete_db_files(&PathBuf::from("path/to/database"))?;
      ```
+
+## Contributing
+Contributions are welcome! Please open an issue or submit a pull request on GitHub.
+
+## License
+This project is licensed under the MIT License.
+
