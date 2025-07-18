@@ -75,7 +75,7 @@ pub fn run(args: Cli) -> Result<(), String> {
     let storage = match args.action {
         Action::New(storage_path) => {
             let path = storage_path.storage_path.to_string_lossy().to_string();
-            let config = StorageConfig::new(path, None);
+            let config = StorageConfig::new(path, None, None);
 
             Storage::new(&config).map_err(|e| e.to_string())?;
             println!("Created new storage at {:?}", storage_path.storage_path);
@@ -84,6 +84,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         _ => {
             let config = StorageConfig::new(
                 args.action.get_storage_path().to_string_lossy().to_string(),
+                None,
                 None,
             );
             Storage::open(&config).map_err(|e| e.to_string())?
@@ -94,6 +95,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         Action::New(storage_path) => {
             let config = StorageConfig::new(
                 storage_path.storage_path.to_string_lossy().to_string(),
+                None,
                 None,
             );
             Storage::new(&config).map_err(|e| e.to_string())?;

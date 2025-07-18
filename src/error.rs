@@ -17,10 +17,12 @@ pub enum StorageError {
     CreationError(#[from] rocksdb::Error),
     #[error("Error while commiting changes")]
     CommitError,
-    #[error("Error while eliminating db files: {0}")]
-    EliminationError(#[from] IoError),
+    #[error("Failed I/O action: {0}")]
+    IoError(#[from] IoError),
     #[error("Failed to encrypt data")]
     FailedToEncryptData { error: cocoon::Error },
     #[error("Failed to decrypt data")]
     FailedToDecryptData { error: cocoon::Error },
+    #[error("Backup path not set")]
+    BackupPathNotSet,
 }

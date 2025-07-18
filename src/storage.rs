@@ -2,14 +2,21 @@ use crate::{error::StorageError, storage_config::StorageConfig};
 use cocoon::Cocoon;
 use rocksdb::{SliceTransform, TransactionDB};
 use serde::{de::DeserializeOwned, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fs::{self, File},
+    io::{Cursor, Write},
+    path::PathBuf,
+};
 use uuid::Uuid;
-use std::{cell::RefCell, collections::HashMap, fs, io::Cursor, path::PathBuf};
 
 pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
     encrypt: Option<String>,
+    backup_path: Option<String>,
 }
 
 pub trait KeyValueStore {
@@ -18,12 +25,7 @@ pub trait KeyValueStore {
         K: AsRef<str>,
         V: DeserializeOwned;
 
-    fn set<K, V>(
-        &self,
-        key: K,
-        value: V,
-        transaction_id: Option<Uuid>,
-    ) -> Result<(), StorageError>
+    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<Uuid>) -> Result<(), StorageError>
     where
         K: AsRef<str>,
         V: Serialize;
@@ -65,11 +67,41 @@ impl Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
             encrypt: config.encrypt.clone(),
+            backup_path: config.backup_path.clone(),
         })
+    }
+
+    pub fn backup(&self) -> Result<(), StorageError> {
+        match &self.backup_path {
+            Some(backup_path) => {
+                let snapshot = self.db.snapshot();
+                let mut iter = snapshot.iterator(rocksdb::IteratorMode::Start);
+                let mut map = HashMap::new();
+                while let Some(Ok((k, v))) = iter.next() {
+                    let k = serde_json::to_string(&k).map_err(|_| StorageError::SerializationError)?;
+                    map.insert(k, v.to_vec());
+                }
+                let mut file = File::create(backup_path)?;
+                let serialized_data = serde_json::to_string(&map)
+                    .map_err(|_| StorageError::SerializationError)?;
+                file.write_all(serialized_data.as_bytes())?;
+            }
+            None => return Err(StorageError::BackupPathNotSet),
+        }
+
+        Ok(())
     }
 
     pub fn delete_db_files(path: &PathBuf) -> Result<(), StorageError> {
         fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    pub fn delete_backup_file(backup_path: Option<PathBuf>) -> Result<(), StorageError> {
+        match backup_path {
+            Some(path) => fs::remove_file(&path)?,
+            None => {}
+        }
         Ok(())
     }
 
@@ -370,6 +402,7 @@ mod tests {
 
     fn create_path_and_storage(
         is_encrypted: bool,
+        backup_path: Option<String>,
     ) -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
         let path = &temp_storage();
 
@@ -382,58 +415,64 @@ mod tests {
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             encrypt,
+            backup_path: backup_path,
         };
         let storage = Storage::new(&config)?;
 
         Ok((path.clone(), config, storage))
     }
 
-    fn delete_storage(path: &PathBuf, storage: Storage) -> Result<(), StorageError> {
+    fn delete_storage(
+        path: &PathBuf,
+        backup_path: Option<PathBuf>,
+        storage: Storage,
+    ) -> Result<(), StorageError> {
         drop(storage);
         Storage::delete_db_files(path)?;
+        Storage::delete_backup_file(backup_path)?;
         Ok(())
     }
 
     #[test]
     fn test_new_storage_starts_empty() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         assert!(store.is_empty());
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_add_value_to_storage() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         store.write("test", "test_value")?;
         assert_eq!(store.read("test").unwrap(), Some("test_value".to_string()));
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_read_a_value() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         store.write("test", "test_value")?;
         assert_eq!(store.read("test")?, Some("test_value".to_string()));
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_delete_value() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         store.write("test", "test_value")?;
         assert_eq!(store.read("test")?, Some("test_value".to_string()));
         store.delete("test")?;
         assert_eq!(store.read("test")?, None);
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_find_multiple_answers() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
         store.write("test3", "test_value3")?;
@@ -449,23 +488,23 @@ mod tests {
             ]
         );
 
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_has_key() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         store.write("test1", "test_value1")?;
         assert!(store.has_key("test1")?);
         assert!(!store.has_key("test2")?);
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_open_storage() -> Result<(), StorageError> {
-        let (path, config, store) = create_path_and_storage(false)?;
+        let (path, config, store) = create_path_and_storage(false, None)?;
         store.write("test1", "test_value1")?;
         drop(store);
 
@@ -476,7 +515,7 @@ mod tests {
             Some("test_value1".to_string())
         );
 
-        delete_storage(&path, open_store.unwrap())?;
+        delete_storage(&path, None, open_store.unwrap())?;
         Ok(())
     }
 
@@ -486,6 +525,7 @@ mod tests {
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             encrypt: Some("password".to_string()),
+            backup_path: None,
         };
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());
@@ -494,7 +534,7 @@ mod tests {
 
     #[test]
     fn test_keys() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
         store.write("test3", "test_value3")?;
@@ -507,13 +547,13 @@ mod tests {
         assert!(keys.contains(&"test3".to_string()));
         assert!(keys.contains(&"tes4".to_string()));
 
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_transaction_commit() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         let transaction_id = store.begin_transaction();
         store.transactional_write("test1", "test_value1", transaction_id)?;
         store.transactional_write("test2", "test_value2", transaction_id)?;
@@ -523,13 +563,13 @@ mod tests {
         assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
         assert_eq!(store.read("test3")?, None);
 
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_transaction_rollback() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         let transaction_id = store.begin_transaction();
         store.transactional_write("test1", "test_value1", transaction_id)?;
         store.transactional_write("test2", "test_value2", transaction_id)?;
@@ -538,13 +578,13 @@ mod tests {
         assert_eq!(store.read("test1")?, None);
         assert_eq!(store.read("test2")?, None);
 
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_transactional_delete() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         store.write("test1", "test_value1")?;
         let transaction_id = store.begin_transaction();
         store.transactional_delete("test1", transaction_id).unwrap();
@@ -552,13 +592,13 @@ mod tests {
 
         assert_eq!(store.read("test1").unwrap(), None);
 
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_non_commited_transactions_should_not_appear() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(false)?;
+        let (path, _, store) = create_path_and_storage(false, None)?;
         let transaction_id = store.begin_transaction();
         store
             .transactional_write("test1", "test_value1", transaction_id)
@@ -584,13 +624,13 @@ mod tests {
         assert_eq!(store.read("test3").unwrap(), None);
         store.rollback_transaction(transaction_id).unwrap();
 
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
         Ok(())
     }
 
     #[test]
     fn test_encrypt_and_decrypt() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(true)?;
+        let (path, _, store) = create_path_and_storage(true, None)?;
         store.set("test1", "test_value1", None)?;
         let data = store.get::<String, String>("test1".to_string())?;
         assert!(data.is_some());
@@ -601,7 +641,21 @@ mod tests {
         assert!(data.is_some());
         assert_eq!(data.unwrap(), "test_value2");
 
-        delete_storage(&path, store)?;
+        delete_storage(&path, None, store)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_backup() -> Result<(), StorageError> {
+        let backup_path = "./backup".to_string();
+        let (path, _, store) = create_path_and_storage(false, Some(backup_path.clone()))?;
+        store.write("test1", "test_value1")?;
+        store.backup()?;
+
+        let backup_path = PathBuf::from(backup_path);
+        assert!(backup_path.exists());
+
+        delete_storage(&path, Some(backup_path), store)?;
         Ok(())
     }
 }
