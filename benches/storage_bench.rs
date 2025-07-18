@@ -11,14 +11,14 @@ fn temp_storage() -> PathBuf {
 }
 
 fn setup_database_with_prefix_extractor(storage_path: &PathBuf) -> Storage {
-    let storage_config = StorageConfig::new(storage_path.to_string_lossy().to_string(), None, None);
+    let storage_config = StorageConfig::new(storage_path.to_string_lossy().to_string(), None);
     let db = Storage::new(&storage_config).unwrap();
     write_data(&db);
     db
 }
 
 fn setup_database_without_prefix_extractor(storage_path: &PathBuf) -> Storage {
-    let storage_config = StorageConfig::new(storage_path.to_string_lossy().to_string(), None, None);
+    let storage_config = StorageConfig::new(storage_path.to_string_lossy().to_string(), None);
     let db = Storage::new(&storage_config).unwrap();
     write_data(&db);
     db
