@@ -1,6 +1,12 @@
 # BitVMX Storage Backend
 A Rust library for managing storage for BitVMX 
 
+## ⚠️ Disclaimer
+
+This library is currently under development and may not be fully stable.
+It is not production-ready, has not been audited, and future updates may introduce breaking changes without preserving backward compatibility.
+
+
 ## Installation
 
 For detailed installation instructions, environment setup, and troubleshooting, please see the [Installation Guide](INSTALLATION.md).
