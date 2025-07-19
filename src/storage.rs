@@ -80,11 +80,6 @@ impl Storage {
     }
 
     fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P) -> Result<(), StorageError> {
-        let backup_path = backup_path.as_ref();
-        if !backup_path.exists() {
-            return Err(StorageError::BackupFileNotFound);
-        }
-
         let file = File::open(backup_path)?;
         let mut file = BufReader::new(file);
         let mut buf = Vec::new();

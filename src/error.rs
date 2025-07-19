@@ -23,6 +23,4 @@ pub enum StorageError {
     FailedToEncryptData { error: cocoon::Error },
     #[error("Failed to decrypt data")]
     FailedToDecryptData { error: cocoon::Error },
-    #[error("Backup path does not exist")]
-    BackupFileNotFound,
 }
