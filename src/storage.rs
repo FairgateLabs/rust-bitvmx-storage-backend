@@ -77,13 +77,29 @@ impl Storage {
         let mut item_counter = 0;
         while let Some(Ok((k, v))) = iter.next() {
             if item_counter >= 1000 {
+                let mut serialized_data = String::new();
+                for (key, value) in &vec {
+                    let key = hex::encode(key);
+                    let value = hex::encode(value);
+                    serialized_data.push_str(&format!("{},{};", key, value));
+                }
+                file.write_all(serialized_data.as_bytes())?;
                 item_counter = 0;
-                // Write the current batch to the file
                 vec.clear();
             } else {
                 vec.push((k.to_vec(), v.to_vec()));
                 item_counter += 1;
             }
+        }
+
+        if !vec.is_empty() {
+            let mut serialized_data = String::new();
+            for (key, value) in &vec {
+                let key = hex::encode(key);
+                let value = hex::encode(value);
+                serialized_data.push_str(&format!("{},{};", key, value));
+            }
+            file.write_all(serialized_data.as_bytes())?;
         }
 
         Ok(())
