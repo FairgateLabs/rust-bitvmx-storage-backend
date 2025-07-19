@@ -7,7 +7,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fs::{self, File},
-    io::{Cursor, Write},
+    io::{BufRead, BufReader, Cursor, Write},
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
@@ -69,6 +69,45 @@ impl Storage {
         })
     }
 
+    pub fn restore_from_backup<P: AsRef<Path>>(
+        backup_path: &P,
+        config: &StorageConfig,
+    ) -> Result<Storage, StorageError> {
+        let storage = Storage::new(&config)?;
+        storage.restore_backup(backup_path)?;
+
+        Ok(storage)
+    }
+
+    fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P) -> Result<(), StorageError> {
+        let backup_path = backup_path.as_ref();
+        if !backup_path.exists() {
+            return Err(StorageError::BackupFileNotFound);
+        }
+
+        let file = File::open(backup_path)?;
+        let mut file = BufReader::new(file);
+        let mut buf = Vec::new();
+        //TODO: read and every 1000 items write to the database?
+        while file.read_until(b';', &mut buf)? != 0 {
+            buf.pop();
+            let mut parts = buf.splitn(2, |&b| b == b',');
+            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                //TODO: Create a backup deserializer
+                let key = String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                let value = String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
+                let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
+
+                self.db.put(key, value)
+                    .map_err(|_| StorageError::WriteError)?;
+            }
+            buf.clear();
+        }
+
+        Ok(())
+    }
+
     pub fn backup<P: AsRef<Path>>(&self, backup_path: P) -> Result<(), StorageError> {
         let snapshot = self.db.snapshot();
         let mut iter = snapshot.iterator(rocksdb::IteratorMode::Start);
@@ -77,6 +116,7 @@ impl Storage {
         let mut item_counter = 0;
         while let Some(Ok((k, v))) = iter.next() {
             if item_counter >= 1000 {
+                //TODO: Create a backup serializer
                 let mut serialized_data = String::new();
                 for (key, value) in &vec {
                     let key = hex::encode(key);
@@ -666,6 +706,25 @@ mod tests {
         let backup_path = PathBuf::from(backup_path);
         assert!(backup_path.exists());
 
+        delete_storage(&path, Some(backup_path), store)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_restore_backup() -> Result<(), StorageError> {
+        let backup_path = "./backup".to_string();
+        let (path, config, store) = create_path_and_storage(false)?;
+        store.write("test1", "test_value1")?;
+        store.write("test2", "test_value2")?;
+        store.backup(backup_path.clone())?;
+
+        delete_storage(&path, None, store)?;
+        let backup_path = PathBuf::from(backup_path);
+        let store = Storage::restore_from_backup(&backup_path, &config)?;
+
+        assert_eq!(store.read("test1")?,Some("test_value1".to_string()));
+        assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
+        
         delete_storage(&path, Some(backup_path), store)?;
         Ok(())
     }
