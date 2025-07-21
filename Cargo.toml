@@ -23,7 +23,3 @@ cocoon = "0.4.2"
 [dev-dependencies]
 criterion = "0.6.0"
 rand = "0.9.1"
-
-[[bench]]
-name = "storage_bench"
-harness = false

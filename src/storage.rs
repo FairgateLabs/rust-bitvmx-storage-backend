@@ -1,6 +1,6 @@
 use crate::{error::StorageError, storage_config::StorageConfig};
 use cocoon::Cocoon;
-use rocksdb::{SliceTransform, TransactionDB};
+use rocksdb::TransactionDB;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -328,31 +328,8 @@ impl KeyValueStore for Storage {
 }
 
 fn create_options() -> rocksdb::Options {
-    let mut options = rocksdb::Options::default();
-    options.set_prefix_extractor(get_prefix_extractor());
+    let options = rocksdb::Options::default();
     options
-}
-
-pub fn get_prefix_extractor() -> SliceTransform {
-    let prefix_extractor = SliceTransform::create(
-        "dynamic_prefix",
-        move |key| {
-            let mut positions = key
-                .iter()
-                .enumerate()
-                .filter(|&(_, &c)| c == b'/')
-                .map(|(i, _)| i);
-
-            if let (Some(_), Some(_), Some(third_pos)) =
-                (positions.next(), positions.next(), positions.next())
-            {
-                return &key[..third_pos + 1];
-            }
-            key
-        },
-        None,
-    );
-    prefix_extractor
 }
 
 #[cfg(test)]
