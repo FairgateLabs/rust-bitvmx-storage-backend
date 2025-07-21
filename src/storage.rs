@@ -83,12 +83,10 @@ impl Storage {
         let file = File::open(backup_path)?;
         let mut file = BufReader::new(file);
         let mut buf = Vec::new();
-        //TODO: read and every 1000 items write to the database?
         while file.read_until(b';', &mut buf)? != 0 {
             buf.pop();
             let mut parts = buf.splitn(2, |&b| b == b',');
             if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                //TODO: Create a backup deserializer
                 let key = String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
                 let value = String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
                 let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
@@ -110,8 +108,9 @@ impl Storage {
         let mut vec = Vec::new();
         let mut item_counter = 0;
         while let Some(Ok((k, v))) = iter.next() {
-            if item_counter >= 1000 {
-                //TODO: Create a backup serializer
+            vec.push((k.to_vec(), v.to_vec()));
+            
+            if item_counter == 1000 {
                 let mut serialized_data = String::new();
                 for (key, value) in &vec {
                     let key = hex::encode(key);
@@ -122,7 +121,6 @@ impl Storage {
                 item_counter = 0;
                 vec.clear();
             } else {
-                vec.push((k.to_vec(), v.to_vec()));
                 item_counter += 1;
             }
         }
@@ -667,7 +665,7 @@ mod tests {
             Some("test_value2".to_string())
         );
         assert_eq!(store.read("test3").unwrap(), None);
-        store.rollback_transaction(transaction_id).unwrap();
+        store.rollback_transaction(second_transaction_id).unwrap();
 
         delete_storage(&path, None, store)?;
         Ok(())
@@ -692,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_backup() -> Result<(), StorageError> {
-        let backup_path = "./backup".to_string();
+        let backup_path = temp_storage();
         let (path, _, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
@@ -707,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_restore_backup() -> Result<(), StorageError> {
-        let backup_path = "./backup".to_string();
+        let backup_path = temp_storage();
         let (path, config, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
@@ -719,6 +717,34 @@ mod tests {
 
         assert_eq!(store.read("test1")?,Some("test_value1".to_string()));
         assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
+        
+        delete_storage(&path, Some(backup_path), store)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_more_than_1000_values_to_backup() -> Result<(), StorageError> {
+        let quantity = 1001;
+        let backup_path = temp_storage();
+        let (path, config, store) = create_path_and_storage(false)?;
+        for i in 0..quantity {
+            store.write(&format!("test{}", i), &format!("test_value{}", i))?;
+        }
+        store.backup(backup_path.clone())?;
+
+        let backup_path = PathBuf::from(backup_path);
+        assert!(backup_path.exists());
+
+        delete_storage(&path, None, store)?;
+
+        let store = Storage::restore_from_backup(&backup_path, &config)?;
+        
+        for i in 0..quantity {
+            assert_eq!(
+                store.read(&format!("test{}", i))?,
+                Some(format!("test_value{}", i).to_string())
+            );
+        }
         
         delete_storage(&path, Some(backup_path), store)?;
         Ok(())
