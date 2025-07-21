@@ -69,17 +69,7 @@ impl Storage {
         })
     }
 
-    pub fn restore_from_backup<P: AsRef<Path>>(
-        backup_path: &P,
-        config: &StorageConfig,
-    ) -> Result<Storage, StorageError> {
-        let storage = Storage::new(&config)?;
-        storage.restore_backup(backup_path)?;
-
-        Ok(storage)
-    }
-
-    fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P) -> Result<(), StorageError> {
+    pub fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P) -> Result<(), StorageError> {
         let file = File::open(backup_path)?;
         let mut file = BufReader::new(file);
         let mut buf = Vec::new();
@@ -695,8 +685,6 @@ mod tests {
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
         store.backup(backup_path.clone())?;
-
-        let backup_path = PathBuf::from(backup_path);
         assert!(backup_path.exists());
 
         delete_storage(&path, Some(backup_path), store)?;
@@ -712,8 +700,8 @@ mod tests {
         store.backup(backup_path.clone())?;
 
         delete_storage(&path, None, store)?;
-        let backup_path = PathBuf::from(backup_path);
-        let store = Storage::restore_from_backup(&backup_path, &config)?;
+        let store = Storage::new(&config)?;
+        store.restore_backup(&backup_path)?;
 
         assert_eq!(store.read("test1")?,Some("test_value1".to_string()));
         assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
@@ -724,20 +712,19 @@ mod tests {
 
     #[test]
     fn test_more_than_1000_values_to_backup() -> Result<(), StorageError> {
-        let quantity = 1001;
+        let quantity = 1500;
         let backup_path = temp_storage();
         let (path, config, store) = create_path_and_storage(false)?;
         for i in 0..quantity {
             store.write(&format!("test{}", i), &format!("test_value{}", i))?;
         }
         store.backup(backup_path.clone())?;
-
-        let backup_path = PathBuf::from(backup_path);
         assert!(backup_path.exists());
 
         delete_storage(&path, None, store)?;
 
-        let store = Storage::restore_from_backup(&backup_path, &config)?;
+        let store = Storage::new(&config)?;
+        store.restore_backup(&backup_path.clone())?;
         
         for i in 0..quantity {
             assert_eq!(

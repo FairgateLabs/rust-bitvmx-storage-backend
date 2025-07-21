@@ -26,5 +26,5 @@ criterion = "0.6.0"
 rand = "0.9.1"
 
 [[bench]]
-name = "storage_bench"
+name = "backup_bench"
 harness = false
