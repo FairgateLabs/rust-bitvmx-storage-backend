@@ -8,9 +8,6 @@ pub struct StorageConfig {
 
 impl StorageConfig {
     pub fn new(path: String, encrypt: Option<String>) -> Self {
-        Self {
-            path,
-            encrypt,
-        }
+        Self { path, encrypt }
     }
 }

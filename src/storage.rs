@@ -77,12 +77,15 @@ impl Storage {
             buf.pop();
             let mut parts = buf.splitn(2, |&b| b == b',');
             if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                let key = String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                let value = String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                let key =
+                    String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                let value =
+                    String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
                 let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
                 let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
 
-                self.db.put(key, value)
+                self.db
+                    .put(key, value)
                     .map_err(|_| StorageError::WriteError)?;
             }
             buf.clear();
@@ -99,7 +102,7 @@ impl Storage {
         let mut item_counter = 0;
         while let Some(Ok((k, v))) = iter.next() {
             vec.push((k.to_vec(), v.to_vec()));
-            
+
             if item_counter == 1000 {
                 let mut serialized_data = String::new();
                 for (key, value) in &vec {
@@ -134,9 +137,8 @@ impl Storage {
     }
 
     pub fn delete_backup_file(backup_path: Option<PathBuf>) -> Result<(), StorageError> {
-        match backup_path {
-            Some(path) => fs::remove_file(&path)?,
-            None => {}
+        if let Some(path) = backup_path {
+            fs::remove_file(path)?;
         }
         Ok(())
     }
@@ -703,9 +705,9 @@ mod tests {
         let store = Storage::new(&config)?;
         store.restore_backup(&backup_path)?;
 
-        assert_eq!(store.read("test1")?,Some("test_value1".to_string()));
+        assert_eq!(store.read("test1")?, Some("test_value1".to_string()));
         assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
-        
+
         delete_storage(&path, Some(backup_path), store)?;
         Ok(())
     }
@@ -725,14 +727,14 @@ mod tests {
 
         let store = Storage::new(&config)?;
         store.restore_backup(&backup_path.clone())?;
-        
+
         for i in 0..quantity {
             assert_eq!(
                 store.read(&format!("test{}", i))?,
                 Some(format!("test_value{}", i).to_string())
             );
         }
-        
+
         delete_storage(&path, Some(backup_path), store)?;
         Ok(())
     }
