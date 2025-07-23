@@ -37,14 +37,9 @@ fn create_path_and_storage(
     Ok((path.clone(), config, storage))
 }
 
-fn delete_storage(
-    path: &PathBuf,
-    backup_path: Option<PathBuf>,
-    storage: Storage,
-) -> Result<(), StorageError> {
+fn delete_storage(path: &PathBuf, storage: Storage) -> Result<(), StorageError> {
     drop(storage);
     Storage::delete_db_files(path)?;
-    Storage::delete_backup_file(backup_path)?;
     Ok(())
 }
 
@@ -72,7 +67,7 @@ fn bench_create_storage(c: &mut Criterion) {
         },
     );
 
-    delete_storage(&path, None, storage).unwrap();
+    delete_storage(&path, storage).unwrap();
     group.finish();
 }
 
@@ -92,7 +87,8 @@ fn bench_create_backup(c: &mut Criterion) {
             });
         });
 
-    delete_storage(&storage_path, Some(backup_path), storage).unwrap();
+    delete_storage(&storage_path, storage).unwrap();
+    Storage::delete_backup_file(backup_path).unwrap();
     group.finish();
 }
 
@@ -104,7 +100,7 @@ fn bench_restore_backup(c: &mut Criterion) {
     let (storage_path, _, storage) = create_path_and_storage(false).unwrap();
     write_db(&storage, number_of_items);
     storage.backup(backup_path.clone()).unwrap();
-    delete_storage(&storage_path, None, storage).unwrap();
+    delete_storage(&storage_path, storage).unwrap();
     let (path, _, store) = create_path_and_storage(false).unwrap();
 
     group.sample_size(10).bench_function(
@@ -116,7 +112,8 @@ fn bench_restore_backup(c: &mut Criterion) {
         },
     );
 
-    delete_storage(&path, Some(backup_path), store).unwrap();
+    delete_storage(&path, store).unwrap();
+    Storage::delete_backup_file(backup_path).unwrap();
     group.finish();
 }
 

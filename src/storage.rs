@@ -136,10 +136,8 @@ impl Storage {
         Ok(())
     }
 
-    pub fn delete_backup_file(backup_path: Option<PathBuf>) -> Result<(), StorageError> {
-        if let Some(path) = backup_path {
-            fs::remove_file(path)?;
-        }
+    pub fn delete_backup_file(backup_path: PathBuf) -> Result<(), StorageError> {
+        fs::remove_file(backup_path)?;
         Ok(())
     }
 
@@ -458,14 +456,9 @@ mod tests {
         Ok((path.clone(), config, storage))
     }
 
-    fn delete_storage(
-        path: &PathBuf,
-        backup_path: Option<PathBuf>,
-        storage: Storage,
-    ) -> Result<(), StorageError> {
+    fn delete_storage(path: &PathBuf, storage: Storage) -> Result<(), StorageError> {
         drop(storage);
         Storage::delete_db_files(path)?;
-        Storage::delete_backup_file(backup_path)?;
         Ok(())
     }
 
@@ -473,7 +466,7 @@ mod tests {
     fn test_new_storage_starts_empty() -> Result<(), StorageError> {
         let (path, _, store) = create_path_and_storage(false)?;
         assert!(store.is_empty());
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -482,7 +475,7 @@ mod tests {
         let (path, _, store) = create_path_and_storage(false)?;
         store.write("test", "test_value")?;
         assert_eq!(store.read("test").unwrap(), Some("test_value".to_string()));
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -491,7 +484,7 @@ mod tests {
         let (path, _, store) = create_path_and_storage(false)?;
         store.write("test", "test_value")?;
         assert_eq!(store.read("test")?, Some("test_value".to_string()));
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -502,7 +495,7 @@ mod tests {
         assert_eq!(store.read("test")?, Some("test_value".to_string()));
         store.delete("test")?;
         assert_eq!(store.read("test")?, None);
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -524,7 +517,7 @@ mod tests {
             ]
         );
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -534,7 +527,7 @@ mod tests {
         store.write("test1", "test_value1")?;
         assert!(store.has_key("test1")?);
         assert!(!store.has_key("test2")?);
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -551,7 +544,7 @@ mod tests {
             Some("test_value1".to_string())
         );
 
-        delete_storage(&path, None, open_store.unwrap())?;
+        delete_storage(&path, open_store.unwrap())?;
         Ok(())
     }
 
@@ -582,7 +575,7 @@ mod tests {
         assert!(keys.contains(&"test3".to_string()));
         assert!(keys.contains(&"tes4".to_string()));
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -598,7 +591,7 @@ mod tests {
         assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
         assert_eq!(store.read("test3")?, None);
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -613,7 +606,7 @@ mod tests {
         assert_eq!(store.read("test1")?, None);
         assert_eq!(store.read("test2")?, None);
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -627,7 +620,7 @@ mod tests {
 
         assert_eq!(store.read("test1").unwrap(), None);
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -659,7 +652,7 @@ mod tests {
         assert_eq!(store.read("test3").unwrap(), None);
         store.rollback_transaction(second_transaction_id).unwrap();
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -676,7 +669,7 @@ mod tests {
         assert!(data.is_some());
         assert_eq!(data.unwrap(), "test_value2");
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         Ok(())
     }
 
@@ -689,7 +682,8 @@ mod tests {
         store.backup(backup_path.clone())?;
         assert!(backup_path.exists());
 
-        delete_storage(&path, Some(backup_path), store)?;
+        delete_storage(&path, store)?;
+        Storage::delete_backup_file(backup_path).unwrap();
         Ok(())
     }
 
@@ -701,14 +695,15 @@ mod tests {
         store.write("test2", "test_value2")?;
         store.backup(backup_path.clone())?;
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
         let store = Storage::new(&config)?;
         store.restore_backup(&backup_path)?;
 
         assert_eq!(store.read("test1")?, Some("test_value1".to_string()));
         assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
 
-        delete_storage(&path, Some(backup_path), store)?;
+        delete_storage(&path, store)?;
+        Storage::delete_backup_file(backup_path).unwrap();
         Ok(())
     }
 
@@ -723,7 +718,7 @@ mod tests {
         store.backup(backup_path.clone())?;
         assert!(backup_path.exists());
 
-        delete_storage(&path, None, store)?;
+        delete_storage(&path, store)?;
 
         let store = Storage::new(&config)?;
         store.restore_backup(&backup_path.clone())?;
@@ -735,7 +730,8 @@ mod tests {
             );
         }
 
-        delete_storage(&path, Some(backup_path), store)?;
+        delete_storage(&path, store)?;
+        Storage::delete_backup_file(backup_path).unwrap();
         Ok(())
     }
 }
