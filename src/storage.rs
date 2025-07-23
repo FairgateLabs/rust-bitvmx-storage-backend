@@ -3,8 +3,14 @@ use cocoon::Cocoon;
 use rocksdb::{SliceTransform, TransactionDB};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fs::{self, File},
+    io::{BufRead, BufReader, Cursor, Write},
+    path::{Path, PathBuf},
+};
 use uuid::Uuid;
-use std::{cell::RefCell, collections::HashMap, fs, io::Cursor, path::PathBuf};
 
 pub struct Storage {
     db: rocksdb::TransactionDB,
@@ -18,12 +24,7 @@ pub trait KeyValueStore {
         K: AsRef<str>,
         V: DeserializeOwned;
 
-    fn set<K, V>(
-        &self,
-        key: K,
-        value: V,
-        transaction_id: Option<Uuid>,
-    ) -> Result<(), StorageError>
+    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<Uuid>) -> Result<(), StorageError>
     where
         K: AsRef<str>,
         V: Serialize;
@@ -68,8 +69,75 @@ impl Storage {
         })
     }
 
+    pub fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P) -> Result<(), StorageError> {
+        let file = File::open(backup_path)?;
+        let mut file = BufReader::new(file);
+        let mut buf = Vec::new();
+        while file.read_until(b';', &mut buf)? != 0 {
+            buf.pop();
+            let mut parts = buf.splitn(2, |&b| b == b',');
+            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                let key =
+                    String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                let value =
+                    String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
+                let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
+
+                self.db
+                    .put(key, value)
+                    .map_err(|_| StorageError::WriteError)?;
+            }
+            buf.clear();
+        }
+
+        Ok(())
+    }
+
+    pub fn backup<P: AsRef<Path>>(&self, backup_path: P) -> Result<(), StorageError> {
+        let snapshot = self.db.snapshot();
+        let mut iter = snapshot.iterator(rocksdb::IteratorMode::Start);
+        let mut file = File::create(backup_path)?;
+        let mut vec = Vec::new();
+        let mut item_counter = 0;
+        while let Some(Ok((k, v))) = iter.next() {
+            vec.push((k.to_vec(), v.to_vec()));
+
+            if item_counter == 1000 {
+                let mut serialized_data = String::new();
+                for (key, value) in &vec {
+                    let key = hex::encode(key);
+                    let value = hex::encode(value);
+                    serialized_data.push_str(&format!("{},{};", key, value));
+                }
+                file.write_all(serialized_data.as_bytes())?;
+                item_counter = 0;
+                vec.clear();
+            } else {
+                item_counter += 1;
+            }
+        }
+
+        if !vec.is_empty() {
+            let mut serialized_data = String::new();
+            for (key, value) in &vec {
+                let key = hex::encode(key);
+                let value = hex::encode(value);
+                serialized_data.push_str(&format!("{},{};", key, value));
+            }
+            file.write_all(serialized_data.as_bytes())?;
+        }
+
+        Ok(())
+    }
+
     pub fn delete_db_files(path: &PathBuf) -> Result<(), StorageError> {
         fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    pub fn delete_backup_file(backup_path: PathBuf) -> Result<(), StorageError> {
+        fs::remove_file(backup_path)?;
         Ok(())
     }
 
@@ -582,7 +650,7 @@ mod tests {
             Some("test_value2".to_string())
         );
         assert_eq!(store.read("test3").unwrap(), None);
-        store.rollback_transaction(transaction_id).unwrap();
+        store.rollback_transaction(second_transaction_id).unwrap();
 
         delete_storage(&path, store)?;
         Ok(())
@@ -602,6 +670,68 @@ mod tests {
         assert_eq!(data.unwrap(), "test_value2");
 
         delete_storage(&path, store)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_backup() -> Result<(), StorageError> {
+        let backup_path = temp_storage();
+        let (path, _, store) = create_path_and_storage(false)?;
+        store.write("test1", "test_value1")?;
+        store.write("test2", "test_value2")?;
+        store.backup(backup_path.clone())?;
+        assert!(backup_path.exists());
+
+        delete_storage(&path, store)?;
+        Storage::delete_backup_file(backup_path).unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn test_restore_backup() -> Result<(), StorageError> {
+        let backup_path = temp_storage();
+        let (path, config, store) = create_path_and_storage(false)?;
+        store.write("test1", "test_value1")?;
+        store.write("test2", "test_value2")?;
+        store.backup(backup_path.clone())?;
+
+        delete_storage(&path, store)?;
+        let store = Storage::new(&config)?;
+        store.restore_backup(&backup_path)?;
+
+        assert_eq!(store.read("test1")?, Some("test_value1".to_string()));
+        assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
+
+        delete_storage(&path, store)?;
+        Storage::delete_backup_file(backup_path).unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn test_more_than_1000_values_to_backup() -> Result<(), StorageError> {
+        let quantity = 1500;
+        let backup_path = temp_storage();
+        let (path, config, store) = create_path_and_storage(false)?;
+        for i in 0..quantity {
+            store.write(&format!("test{}", i), &format!("test_value{}", i))?;
+        }
+        store.backup(backup_path.clone())?;
+        assert!(backup_path.exists());
+
+        delete_storage(&path, store)?;
+
+        let store = Storage::new(&config)?;
+        store.restore_backup(&backup_path.clone())?;
+
+        for i in 0..quantity {
+            assert_eq!(
+                store.read(&format!("test{}", i))?,
+                Some(format!("test_value{}", i).to_string())
+            );
+        }
+
+        delete_storage(&path, store)?;
+        Storage::delete_backup_file(backup_path).unwrap();
         Ok(())
     }
 }
