@@ -20,6 +20,14 @@ struct StoragePath {
 }
 
 #[derive(Parser, Debug, Clone)]
+struct BackupPath {
+    #[clap(short, long, default_value = "backup")]
+    backup_path: PathBuf,
+    #[clap(flatten)]
+    storage_path: StoragePath,
+}
+
+#[derive(Parser, Debug, Clone)]
 struct StorageAndKey {
     #[clap(short, long)]
     key: String,
@@ -46,6 +54,8 @@ enum Action {
     PartialCompare(StorageAndKey),
     Contains(StorageAndKey),
     ListKeys(StoragePath),
+    Backup(BackupPath),
+    RestoreBackup(BackupPath),
     Dump {
         #[clap(flatten)]
         storage_path: StoragePath,
@@ -66,6 +76,8 @@ impl Action {
             Action::PartialCompare(args) => &args.storage_path.storage_path,
             Action::Contains(args) => &args.storage_path.storage_path,
             Action::ListKeys(args) => &args.storage_path,
+            Action::Backup(args) => &args.storage_path.storage_path,
+            Action::RestoreBackup(args) => &args.storage_path.storage_path,
             Action::Dump { storage_path, .. } => &storage_path.storage_path,
         }
     }
@@ -158,6 +170,18 @@ pub fn run(args: Cli) -> Result<(), String> {
             for key in keys {
                 println!("{}", key);
             }
+        }
+        Action::Backup(backup) => {
+            storage
+                .backup(&backup.backup_path)
+                .map_err(|e| e.to_string())?;
+            println!("Backup created at {:?}", backup.backup_path);
+        }
+        Action::RestoreBackup(backup) => {
+            storage
+                .restore_backup(&backup.backup_path)
+                .map_err(|e| e.to_string())?;
+            println!("Backup restored from {:?}", backup.backup_path);
         }
         Action::Dump {
             storage_path: _,
