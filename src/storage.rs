@@ -418,7 +418,7 @@ mod tests {
     ) -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
         let path = &temp_storage();
 
-        let encrypt = if is_encrypted {
+        let password = if is_encrypted {
             Some("password".to_string())
         } else {
             None
