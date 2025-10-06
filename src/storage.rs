@@ -15,7 +15,7 @@ use uuid::Uuid;
 pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
-    encrypt: Option<String>,
+    password: Option<String>,
 }
 
 pub trait KeyValueStore {
@@ -65,7 +65,7 @@ impl Storage {
         Ok(Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
-            encrypt: config.encrypt.clone(),
+            password: config.password.clone(),
         })
     }
 
@@ -167,7 +167,7 @@ impl Storage {
         let tx = self.db.transaction();
         let mut data = value.as_bytes().to_vec();
 
-        if self.encrypt.is_some() {
+        if self.password.is_some() {
             data = self.encrypt_data(data)?
         }
 
@@ -188,7 +188,7 @@ impl Storage {
         let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
         let mut data = value.as_bytes().to_vec();
 
-        if self.encrypt.is_some() {
+        if self.password.is_some() {
             data = self.encrypt_data(data)?
         }
 
@@ -201,7 +201,7 @@ impl Storage {
     pub fn read(&self, key: &str) -> Result<Option<String>, StorageError> {
         match self.db.get(key.as_bytes()) {
             Ok(Some(mut data)) => {
-                if self.encrypt.is_some() {
+                if self.password.is_some() {
                     data = self.decrypt_data(data)?;
                 }
 
@@ -304,7 +304,7 @@ impl Storage {
 
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut cocoon = Cocoon::new(self.encrypt.as_ref().unwrap().as_bytes());
+        let mut cocoon = Cocoon::new(self.password.as_ref().unwrap().as_bytes());
         cocoon
             .dump(data, &mut entry_cursor)
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
@@ -314,7 +314,7 @@ impl Storage {
     fn decrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let mut entry_cursor = Cursor::new(data);
 
-        let cocoon = Cocoon::new(self.encrypt.as_ref().unwrap().as_bytes());
+        let cocoon = Cocoon::new(self.password.as_ref().unwrap().as_bytes());
         cocoon
             .parse(&mut entry_cursor)
             .map_err(|error| StorageError::FailedToDecryptData { error })
@@ -426,7 +426,7 @@ mod tests {
 
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            encrypt,
+            password,
         };
         let storage = Storage::new(&config)?;
 
@@ -530,7 +530,7 @@ mod tests {
         let path = &temp_storage();
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            encrypt: Some("password".to_string()),
+            password: Some("password".to_string()),
         };
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());
