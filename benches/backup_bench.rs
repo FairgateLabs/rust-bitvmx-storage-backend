@@ -22,7 +22,7 @@ fn create_path_and_storage(
 ) -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
     let path = &temp_storage();
 
-    let encrypt = if is_encrypted {
+    let password = if is_encrypted {
         Some("password".to_string())
     } else {
         None
@@ -30,7 +30,7 @@ fn create_path_and_storage(
 
     let config = StorageConfig {
         path: path.to_string_lossy().to_string(),
-        encrypt,
+        password,
     };
     let storage = Storage::new(&config)?;
 
