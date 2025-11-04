@@ -256,7 +256,7 @@ impl Storage {
         ));
         while let Some(Ok((k, v))) = iter.next() {
             let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-            let v = if self.encrypt.is_some() {
+            let v = if self.password.is_some() {
                 self.decrypt_data(v.to_vec())?
             } else {
                 v.to_vec()
