@@ -73,25 +73,36 @@ impl Storage {
         let file = File::open(backup_path)?;
         let mut file = BufReader::new(file);
         let mut buf = Vec::new();
-        while file.read_until(b';', &mut buf)? != 0 {
-            buf.pop();
-            let mut parts = buf.splitn(2, |&b| b == b',');
-            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                let key =
-                    String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                let value =
-                    String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
-                let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
-
-                self.db
-                    .put(key, value)
-                    .map_err(|_| StorageError::WriteError)?;
+        let transaction_id = self.begin_transaction();
+        let result: Result<(), StorageError> = {
+            while file.read_until(b';', &mut buf)? != 0 {
+                buf.pop();
+                let mut parts = buf.splitn(2, |&b| b == b',');
+                if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                    let key =
+                        String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let value =
+                        String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
+                    let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
+                    
+                    let mut map = self.transactions.borrow_mut();
+                    let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+                    tx.put(&key, &value)
+                        .map_err(|_| StorageError::WriteError)?;
+                }
+                buf.clear();
             }
-            buf.clear();
+            Ok(())  
+        };
+
+        if result.is_err() {
+            self.rollback_transaction(transaction_id)?;
+        } else {
+            self.commit_transaction(transaction_id)?;
         }
 
-        Ok(())
+        result
     }
 
     pub fn backup<P: AsRef<Path>>(&self, backup_path: P) -> Result<(), StorageError> {

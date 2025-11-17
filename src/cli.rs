@@ -14,9 +14,11 @@ pub struct Cli {
 }
 
 #[derive(Parser, Debug, Clone)]
-struct StoragePath {
+struct StorageSettings {
     #[clap(short, long, default_value = "storage.db")]
     storage_path: PathBuf,
+    #[clap(short, long)]
+    password: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -24,7 +26,7 @@ struct BackupPath {
     #[clap(short, long, default_value = "backup")]
     backup_path: PathBuf,
     #[clap(flatten)]
-    storage_path: StoragePath,
+    storage_path: StorageSettings,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -32,7 +34,7 @@ struct StorageAndKey {
     #[clap(short, long)]
     key: String,
     #[clap(flatten)]
-    storage_path: StoragePath,
+    storage_path: StorageSettings,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -42,23 +44,23 @@ struct StorageKeyValue {
     #[clap(short, long)]
     value: String,
     #[clap(flatten)]
-    storage_path: StoragePath,
+    storage_path: StorageSettings,
 }
 
 #[derive(Subcommand, Debug)]
 enum Action {
-    New(StoragePath),
+    New(StorageSettings),
     Write(StorageKeyValue),
     Read(StorageAndKey),
     Delete(StorageAndKey),
     PartialCompare(StorageAndKey),
     Contains(StorageAndKey),
-    ListKeys(StoragePath),
+    ListKeys(StorageSettings),
     Backup(BackupPath),
     RestoreBackup(BackupPath),
     Dump {
         #[clap(flatten)]
-        storage_path: StoragePath,
+        storage_path: StorageSettings,
         #[clap(short, long, default_value = "dump.json")]
         dump_file: PathBuf,
         #[clap(short, long, default_value = "false")]
@@ -81,6 +83,21 @@ impl Action {
             Action::Dump { storage_path, .. } => &storage_path.storage_path,
         }
     }
+
+    fn get_encryption_password(&self) -> Option<String> {
+        match self {
+            Action::New(args) => args.password.clone(),
+            Action::Write(args) => args.storage_path.password.clone(),
+            Action::Read(args) => args.storage_path.password.clone(),
+            Action::Delete(args) => args.storage_path.password.clone(),
+            Action::PartialCompare(args) => args.storage_path.password.clone(),
+            Action::Contains(args) => args.storage_path.password.clone(),
+            Action::ListKeys(args) => args.password.clone(),
+            Action::Backup(args) => args.storage_path.password.clone(),
+            Action::RestoreBackup(args) => args.storage_path.password.clone(),
+            Action::Dump { storage_path, .. } => storage_path.password.clone(),
+        }
+    }
 }
 
 pub fn run(args: Cli) -> Result<(), String> {
@@ -96,7 +113,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         _ => {
             let config = StorageConfig::new(
                 args.action.get_storage_path().to_string_lossy().to_string(),
-                None,
+                args.action.get_encryption_password(),
             );
             Storage::open(&config).map_err(|e| e.to_string())?
         }
@@ -164,9 +181,9 @@ pub fn run(args: Cli) -> Result<(), String> {
                 storage_and_key.storage_path
             );
         }
-        Action::ListKeys(_storage) => {
+        Action::ListKeys(storage_settings) => {
             let keys = storage.keys().map_err(|e| e.to_string())?;
-            println!("Listing keys in: {:?}", _storage.storage_path);
+            println!("Listing keys in: {:?}", storage_settings.storage_path);
             for key in keys {
                 println!("{}", key);
             }
