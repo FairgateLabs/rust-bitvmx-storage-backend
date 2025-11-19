@@ -12,6 +12,7 @@ use std::{
 };
 use uuid::Uuid;
 
+/// Storage is limited to single threaded access due to the use of RefCell for transaction management.
 pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
