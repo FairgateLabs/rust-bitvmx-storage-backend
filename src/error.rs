@@ -3,7 +3,7 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
-    #[error("Document not found")]
+    #[error("Value not found")]
     NotFound,
     #[error("Error modifying storage")]
     WriteError,
@@ -25,4 +25,8 @@ pub enum StorageError {
     FailedToDecryptData { error: cocoon::Error },
     #[error("Password does not meet complexity requirements")]
     WeakPassword,
+    #[error("Error generating random DEK: {0}")]
+    RandomDekGenerationError(#[from] rand::rand_core::OsError),
+    #[error("Wrong password provided")]
+    WrongPassword,
 }

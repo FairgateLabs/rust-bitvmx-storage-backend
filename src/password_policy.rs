@@ -1,3 +1,5 @@
+use crate::storage_config::PasswordPolicyConfig;
+
 pub const UPPERCASE: &[char] = &[
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
     'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
@@ -28,16 +30,13 @@ impl Default for PasswordPolicy {
 
 impl PasswordPolicy {
     pub fn new(
-        min_length: usize,
-        number_of_special_chars: usize,
-        number_of_uppercase: usize,
-        number_of_digits: usize,
+        config: PasswordPolicyConfig
     ) -> Self {
         PasswordPolicy {
-            min_length,
-            min_number_of_special_chars: number_of_special_chars,
-            min_number_of_uppercase: number_of_uppercase,
-            min_number_of_digits: number_of_digits,
+            min_length: config.min_length,
+            min_number_of_special_chars: config.min_number_of_special_chars,
+            min_number_of_uppercase: config.min_number_of_uppercase,
+            min_number_of_digits: config.min_number_of_digits,
         }
     }
 

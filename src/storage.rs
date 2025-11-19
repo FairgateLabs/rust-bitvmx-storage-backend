@@ -11,6 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
+use rand::{TryRngCore, rngs::OsRng};
+
+const DEK_KEY: &str = "DEK";
 
 pub struct Storage {
     db: rocksdb::TransactionDB,
@@ -63,9 +66,46 @@ impl Storage {
         )?;
 
         if let Some(ref password) = config.password {
-            let password_policy = PasswordPolicy::default();
+            let password_policy = if let Some(ref policy) = config.password_policy {
+                PasswordPolicy::new(policy.clone())
+            } else {
+                PasswordPolicy::default()
+            };
+
             if !password_policy.is_valid(password) {
                 return Err(StorageError::WeakPassword);
+            }
+
+            if db
+            .get(DEK_KEY.as_bytes())
+            .map_err(|_| StorageError::ReadError)?
+            .is_none() 
+            {
+                let mut bytes = [0u8; 32];
+                OsRng.try_fill_bytes(&mut bytes)?;
+
+                let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+                let mut cocoon = Cocoon::new(password.as_bytes());
+                cocoon
+                    .dump(bytes.to_vec(), &mut entry_cursor)
+                    .map_err(|error| StorageError::FailedToEncryptData { error })?;
+                let encrypted_dek = entry_cursor.into_inner();
+                db.put(DEK_KEY.as_bytes(), encrypted_dek)
+                    .map_err(|_| StorageError::WriteError)?;
+            } else {
+                let encrypted_dek = db
+                    .get(DEK_KEY.as_bytes())
+                    .map_err(|_| StorageError::ReadError)?
+                    .ok_or(StorageError::NotFound)?;
+                
+                let mut entry_cursor = Cursor::new(encrypted_dek);
+
+                let cocoon = Cocoon::new(password.as_bytes());
+                let result = cocoon
+                    .parse(&mut entry_cursor);
+                if result.is_err() {
+                    return Err(StorageError::WrongPassword);
+                }
             }
         }
 
