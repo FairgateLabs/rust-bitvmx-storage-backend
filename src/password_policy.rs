@@ -1,16 +1,12 @@
 pub const UPPERCASE: &[char] = &[
-    'A','B','C','D','E','F','G','H','I','J','K','L','M',
-    'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
+    'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
 ];
-pub const DIGITS: &[char] = &[
-    '0','1','2','3','4','5','6','7','8','9',
-];
+pub const DIGITS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 pub const SPECIAL: &[char] = &[
-    '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-',
-    '.', '/', ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^',
-    '_', '`', '{', '|', '}', '~',
+    '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=',
+    '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~',
 ];
-
 
 pub struct PasswordPolicy {
     min_length: usize,
@@ -47,13 +43,16 @@ impl PasswordPolicy {
 
     pub fn is_valid(&self, password: &str) -> bool {
         let has_enough_length = password.len() >= self.min_length;
-        let has_enough_special_chars = password.chars().filter(|c| SPECIAL.contains(c)).count() >= self.min_number_of_special_chars;
-        let has_enough_uppercase_chars = password.chars().filter(|c| UPPERCASE.contains(c)).count() >= self.min_number_of_uppercase;
-        let has_enough_digits = password.chars().filter(|c| DIGITS.contains(c)).count() >= self.min_number_of_digits;
+        let has_enough_special_chars = password.chars().filter(|c| SPECIAL.contains(c)).count()
+            >= self.min_number_of_special_chars;
+        let has_enough_uppercase_chars = password.chars().filter(|c| UPPERCASE.contains(c)).count()
+            >= self.min_number_of_uppercase;
+        let has_enough_digits =
+            password.chars().filter(|c| DIGITS.contains(c)).count() >= self.min_number_of_digits;
 
-        has_enough_length &&
-        has_enough_special_chars &&
-        has_enough_uppercase_chars &&
-        has_enough_digits
+        has_enough_length
+            && has_enough_special_chars
+            && has_enough_uppercase_chars
+            && has_enough_digits
     }
 }

@@ -424,8 +424,8 @@ fn create_options() -> rocksdb::Options {
 
 #[cfg(test)]
 mod tests {
-    use crate::{storage_config::PasswordPolicyConfig};
     use super::*;
+    use crate::storage_config::PasswordPolicyConfig;
     use rand::{rng, RngCore};
     use std::env;
 
@@ -447,7 +447,7 @@ mod tests {
             None
         };
 
-        let password_policy = PasswordPolicyConfig{
+        let password_policy = PasswordPolicyConfig {
             min_length: 1,
             min_number_of_special_chars: 0,
             min_number_of_uppercase: 0,
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
-        let password_policy = PasswordPolicyConfig{
+        let password_policy = PasswordPolicyConfig {
             min_length: 1,
             min_number_of_special_chars: 0,
             min_number_of_uppercase: 0,

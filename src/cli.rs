@@ -115,7 +115,7 @@ pub fn run(args: Cli) -> Result<(), String> {
             let config = StorageConfig::new(
                 args.action.get_storage_path().to_string_lossy().to_string(),
                 args.action.get_encryption_password(),
-                None
+                None,
             );
             Storage::open(&config).map_err(|e| e.to_string())?
         }

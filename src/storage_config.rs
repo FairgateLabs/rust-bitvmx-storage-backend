@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct PasswordPolicyConfig{
+pub struct PasswordPolicyConfig {
     pub min_length: usize,
     pub min_number_of_special_chars: usize,
     pub min_number_of_uppercase: usize,
@@ -16,7 +16,15 @@ pub struct StorageConfig {
 }
 
 impl StorageConfig {
-    pub fn new(path: String, password: Option<String>, password_policy: Option<PasswordPolicyConfig>) -> Self {
-        Self { path, password, password_policy }
+    pub fn new(
+        path: String,
+        password: Option<String>,
+        password_policy: Option<PasswordPolicyConfig>,
+    ) -> Self {
+        Self {
+            path,
+            password,
+            password_policy,
+        }
     }
 }
