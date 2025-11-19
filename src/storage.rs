@@ -279,7 +279,12 @@ impl Storage {
             .map_err(|_| StorageError::ReadError)?;
         Ok(result.is_some())
     }
-
+    
+    /// # Safety
+    /// This method uses `std::mem::transmute` to extend the transaction's lifetime to `'static`,
+    /// which is safe in this context because all transactions are stored in a `RefCell` within the `Storage` struct,
+    /// and are only accessed from the same thread.
+    /// Ensure that all transactions are properly committed or rolled back to avoid resource leaks.
     pub fn begin_transaction(&self) -> Uuid {
         let transaction = self.db.transaction();
         let mut map = self.transactions.borrow_mut();
@@ -287,7 +292,7 @@ impl Storage {
         map.insert(
             id,
             Box::new(unsafe {
-                std::mem::transmute::<_, rocksdb::Transaction<'static, TransactionDB>>(transaction)
+                std::mem::transmute::<rocksdb::Transaction<'_, TransactionDB>, rocksdb::Transaction<'static, TransactionDB>>(transaction)
             }),
         );
         id
