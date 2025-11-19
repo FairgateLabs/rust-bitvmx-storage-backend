@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rng, RngCore};
 use std::{env, path::PathBuf};
-use storage_backend::{error::StorageError, storage::Storage, storage_config::StorageConfig};
+use storage_backend::{error::StorageError, storage::Storage, storage_config::{PasswordPolicyConfig, StorageConfig}};
 
 fn temp_storage() -> PathBuf {
     let dir = env::temp_dir();
@@ -28,9 +28,17 @@ fn create_path_and_storage(
         None
     };
 
+    let password_policy = PasswordPolicyConfig{
+        min_length: 1,
+        min_number_of_special_chars: 0,
+        min_number_of_uppercase: 0,
+        min_number_of_digits: 0,
+    };
+
     let config = StorageConfig {
         path: path.to_string_lossy().to_string(),
         password,
+        password_policy: Some(password_policy),
     };
     let storage = Storage::new(&config)?;
 

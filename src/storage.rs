@@ -1,4 +1,4 @@
-use crate::{error::StorageError, storage_config::StorageConfig};
+use crate::{error::StorageError, password_policy::PasswordPolicy, storage_config::StorageConfig};
 use cocoon::Cocoon;
 use rocksdb::TransactionDB;
 use serde::{de::DeserializeOwned, Serialize};
@@ -62,6 +62,13 @@ impl Storage {
             config.path.as_str(),
         )?;
 
+        if let Some(ref password) = config.password {
+            let password_policy = PasswordPolicy::default();
+            if !password_policy.is_valid(password) {
+                return Err(StorageError::WeakPassword);
+            }
+        }
+
         Ok(Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
@@ -79,21 +86,20 @@ impl Storage {
                 buf.pop();
                 let mut parts = buf.splitn(2, |&b| b == b',');
                 if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                    let key =
-                        String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    let value =
-                        String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let key = String::from_utf8(key.to_vec())
+                        .map_err(|_| StorageError::ConversionError)?;
+                    let value = String::from_utf8(value.to_vec())
+                        .map_err(|_| StorageError::ConversionError)?;
                     let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
                     let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
-                    
+
                     let mut map = self.transactions.borrow_mut();
                     let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
-                    tx.put(&key, &value)
-                        .map_err(|_| StorageError::WriteError)?;
+                    tx.put(&key, &value).map_err(|_| StorageError::WriteError)?;
                 }
                 buf.clear();
             }
-            Ok(())  
+            Ok(())
         };
 
         if result.is_err() {
@@ -418,6 +424,7 @@ fn create_options() -> rocksdb::Options {
 
 #[cfg(test)]
 mod tests {
+    use crate::{storage_config::PasswordPolicyConfig};
     use super::*;
     use rand::{rng, RngCore};
     use std::env;
@@ -440,9 +447,17 @@ mod tests {
             None
         };
 
+        let password_policy = PasswordPolicyConfig{
+            min_length: 1,
+            min_number_of_special_chars: 0,
+            min_number_of_uppercase: 0,
+            min_number_of_digits: 0,
+        };
+
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             password,
+            password_policy: Some(password_policy),
         };
         let storage = Storage::new(&config)?;
 
@@ -544,9 +559,17 @@ mod tests {
     #[test]
     fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
+        let password_policy = PasswordPolicyConfig{
+            min_length: 1,
+            min_number_of_special_chars: 0,
+            min_number_of_uppercase: 0,
+            min_number_of_digits: 0,
+        };
+
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             password: Some("password".to_string()),
+            password_policy: Some(password_policy),
         };
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());

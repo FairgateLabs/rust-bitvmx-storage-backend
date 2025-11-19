@@ -102,31 +102,28 @@ impl Action {
 
 pub fn run(args: Cli) -> Result<(), String> {
     let storage = match args.action {
-        Action::New(storage_path) => {
-            let path = storage_path.storage_path.to_string_lossy().to_string();
-            let config = StorageConfig::new(path, None);
+        Action::New(storage_settings) => {
+            let path = storage_settings.storage_path.to_string_lossy().to_string();
+            let password = storage_settings.password;
+            let config = StorageConfig::new(path, password, None);
 
             Storage::new(&config).map_err(|e| e.to_string())?;
-            println!("Created new storage at {:?}", storage_path.storage_path);
+            println!("Created new storage at {:?}", storage_settings.storage_path);
             return Ok(());
         }
         _ => {
             let config = StorageConfig::new(
                 args.action.get_storage_path().to_string_lossy().to_string(),
                 args.action.get_encryption_password(),
+                None
             );
             Storage::open(&config).map_err(|e| e.to_string())?
         }
     };
 
     match args.action {
-        Action::New(storage_path) => {
-            let config = StorageConfig::new(
-                storage_path.storage_path.to_string_lossy().to_string(),
-                None,
-            );
-            Storage::new(&config).map_err(|e| e.to_string())?;
-            println!("Created new storage at {:?}", storage_path.storage_path);
+        Action::New(_) => {
+            eprintln!("Already handled above");
         }
         Action::Write(storage_key_value) => {
             storage
