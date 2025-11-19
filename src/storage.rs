@@ -15,6 +15,7 @@ use rand::{TryRngCore, rngs::OsRng};
 
 const DEK_KEY: &str = "DEK";
 
+/// Storage is limited to single threaded access due to the use of RefCell for transaction management.
 pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
@@ -126,20 +127,21 @@ impl Storage {
                 buf.pop();
                 let mut parts = buf.splitn(2, |&b| b == b',');
                 if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                    let key = String::from_utf8(key.to_vec())
-                        .map_err(|_| StorageError::ConversionError)?;
-                    let value = String::from_utf8(value.to_vec())
-                        .map_err(|_| StorageError::ConversionError)?;
+                    let key =
+                        String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let value =
+                        String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
                     let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
                     let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
-
+                    
                     let mut map = self.transactions.borrow_mut();
                     let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
-                    tx.put(&key, &value).map_err(|_| StorageError::WriteError)?;
+                    tx.put(&key, &value)
+                        .map_err(|_| StorageError::WriteError)?;
                 }
                 buf.clear();
             }
-            Ok(())
+            Ok(())  
         };
 
         if result.is_err() {

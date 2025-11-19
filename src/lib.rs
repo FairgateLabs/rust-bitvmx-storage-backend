@@ -1,4 +1,3 @@
-pub mod cli;
 pub mod error;
 pub mod password_policy;
 pub mod storage;

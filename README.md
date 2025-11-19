@@ -6,6 +6,8 @@ A Rust library for managing storage for BitVMX
 This library is currently under development and may not be fully stable.
 It is not production-ready, has not been audited, and future updates may introduce breaking changes without preserving backward compatibility.
 
+## ⚠️ Usage Warning
+This library is not thread-safe and is limited to single threaded access due to the use of RefCell for transaction management.
 
 ## Installation
 
