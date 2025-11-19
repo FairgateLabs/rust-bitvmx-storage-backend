@@ -1,4 +1,4 @@
-use crate::{error::StorageError, storage_config::StorageConfig};
+use crate::{error::StorageError, password_policy::PasswordPolicy, storage_config::StorageConfig};
 use cocoon::Cocoon;
 use rocksdb::TransactionDB;
 use serde::{de::DeserializeOwned, Serialize};
@@ -11,6 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
+use rand::{TryRngCore, rngs::OsRng};
+
+const DEK_KEY: &str = "DEK";
 
 /// Storage is limited to single threaded access due to the use of RefCell for transaction management.
 pub struct Storage {
@@ -62,6 +65,50 @@ impl Storage {
             &rocksdb::TransactionDBOptions::default(),
             config.path.as_str(),
         )?;
+
+        if let Some(ref password) = config.password {
+            let password_policy = if let Some(ref policy) = config.password_policy {
+                PasswordPolicy::new(policy.clone())
+            } else {
+                PasswordPolicy::default()
+            };
+
+            if !password_policy.is_valid(password) {
+                return Err(StorageError::WeakPassword);
+            }
+
+            if db
+            .get(DEK_KEY.as_bytes())
+            .map_err(|_| StorageError::ReadError)?
+            .is_none() 
+            {
+                let mut bytes = [0u8; 32];
+                OsRng.try_fill_bytes(&mut bytes)?;
+
+                let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+                let mut cocoon = Cocoon::new(password.as_bytes());
+                cocoon
+                    .dump(bytes.to_vec(), &mut entry_cursor)
+                    .map_err(|error| StorageError::FailedToEncryptData { error })?;
+                let encrypted_dek = entry_cursor.into_inner();
+                db.put(DEK_KEY.as_bytes(), encrypted_dek)
+                    .map_err(|_| StorageError::WriteError)?;
+            } else {
+                let encrypted_dek = db
+                    .get(DEK_KEY.as_bytes())
+                    .map_err(|_| StorageError::ReadError)?
+                    .ok_or(StorageError::NotFound)?;
+                
+                let mut entry_cursor = Cursor::new(encrypted_dek);
+
+                let cocoon = Cocoon::new(password.as_bytes());
+                let result = cocoon
+                    .parse(&mut entry_cursor);
+                if result.is_err() {
+                    return Err(StorageError::WrongPassword);
+                }
+            }
+        }
 
         Ok(Storage {
             db,
@@ -425,6 +472,7 @@ fn create_options() -> rocksdb::Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage_config::PasswordPolicyConfig;
     use rand::{rng, RngCore};
     use std::env;
 
@@ -446,9 +494,17 @@ mod tests {
             None
         };
 
+        let password_policy = PasswordPolicyConfig {
+            min_length: 1,
+            min_number_of_special_chars: 0,
+            min_number_of_uppercase: 0,
+            min_number_of_digits: 0,
+        };
+
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             password,
+            password_policy: Some(password_policy),
         };
         let storage = Storage::new(&config)?;
 
@@ -550,9 +606,17 @@ mod tests {
     #[test]
     fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
+        let password_policy = PasswordPolicyConfig {
+            min_length: 1,
+            min_number_of_special_chars: 0,
+            min_number_of_uppercase: 0,
+            min_number_of_digits: 0,
+        };
+
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             password: Some("password".to_string()),
+            password_policy: Some(password_policy),
         };
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());
