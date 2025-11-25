@@ -61,7 +61,7 @@ enum Action {
     RestoreBackup(BackupPath),
     Dump {
         #[clap(flatten)]
-        storage_path: StorageSettings,
+        storage_settings: StorageSettings,
         #[clap(short, long, default_value = "dump.json")]
         dump_file: PathBuf,
         #[clap(short, long, default_value = "false")]
@@ -81,7 +81,7 @@ impl Action {
             Action::ListKeys(args) => &args.storage_path,
             Action::Backup(args) => &args.storage_path.storage_path,
             Action::RestoreBackup(args) => &args.storage_path.storage_path,
-            Action::Dump { storage_path, .. } => &storage_path.storage_path,
+            Action::Dump { storage_settings: storage_path, .. } => &storage_path.storage_path,
         }
     }
 
@@ -96,7 +96,7 @@ impl Action {
             Action::ListKeys(args) => args.password.clone(),
             Action::Backup(args) => args.storage_path.password.clone(),
             Action::RestoreBackup(args) => args.storage_path.password.clone(),
-            Action::Dump { storage_path, .. } => storage_path.password.clone(),
+            Action::Dump { storage_settings: storage_path, .. } => storage_path.password.clone(),
         }
     }
 }
@@ -199,7 +199,7 @@ pub fn run(args: Cli) -> Result<(), String> {
             println!("Backup restored from {:?}", backup.backup_path);
         }
         Action::Dump {
-            storage_path: _,
+            storage_settings: _,
             dump_file,
             pretty,
         } => {

@@ -19,7 +19,7 @@ const DEK_KEY: &str = "DEK";
 pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
-    password: Option<String>,
+    password: Option<Vec<u8>>,
 }
 
 pub trait KeyValueStore {
@@ -66,7 +66,7 @@ impl Storage {
             config.path.as_str(),
         )?;
 
-        if let Some(ref password) = config.password {
+        let dek = if let Some(ref password) = config.password {
             let password_policy = if let Some(ref policy) = config.password_policy {
                 PasswordPolicy::new(policy.clone())
             } else {
@@ -74,46 +74,43 @@ impl Storage {
             };
 
             if !password_policy.is_valid(password) {
-                return Err(StorageError::WeakPassword);
+                return Err(StorageError::WeakPassword(password_policy));
             }
+            let dek = match db.get(DEK_KEY).map_err(|_| StorageError::ReadError)? {
+                Some(encrypted_dek) => {
+                    let mut entry_cursor = Cursor::new(encrypted_dek);
 
-            if db
-            .get(DEK_KEY.as_bytes())
-            .map_err(|_| StorageError::ReadError)?
-            .is_none() 
-            {
-                let mut bytes = [0u8; 32];
-                OsRng.try_fill_bytes(&mut bytes)?;
+                    let cocoon = Cocoon::new(password.as_bytes());
+                    let dek = cocoon
+                        .parse(&mut entry_cursor).map_err(|_| StorageError::WrongPassword)?;
+                    
+                    dek
+                },
+                None => {
+                    let mut bytes = [0u8; 32];
+                    OsRng.try_fill_bytes(&mut bytes)?;
 
-                let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-                let mut cocoon = Cocoon::new(password.as_bytes());
-                cocoon
-                    .dump(bytes.to_vec(), &mut entry_cursor)
-                    .map_err(|error| StorageError::FailedToEncryptData { error })?;
-                let encrypted_dek = entry_cursor.into_inner();
-                db.put(DEK_KEY.as_bytes(), encrypted_dek)
-                    .map_err(|_| StorageError::WriteError)?;
-            } else {
-                let encrypted_dek = db
-                    .get(DEK_KEY.as_bytes())
-                    .map_err(|_| StorageError::ReadError)?
-                    .ok_or(StorageError::NotFound)?;
-                
-                let mut entry_cursor = Cursor::new(encrypted_dek);
-
-                let cocoon = Cocoon::new(password.as_bytes());
-                let result = cocoon
-                    .parse(&mut entry_cursor);
-                if result.is_err() {
-                    return Err(StorageError::WrongPassword);
-                }
-            }
-        }
+                    let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+                    let mut cocoon = Cocoon::new(password.as_bytes());
+                    cocoon
+                        .dump(bytes.to_vec(), &mut entry_cursor)
+                        .map_err(|error| StorageError::FailedToEncryptData { error })?;
+                    let encrypted_dek = entry_cursor.into_inner();
+                    db.put(DEK_KEY.as_bytes(), encrypted_dek)
+                        .map_err(|_| StorageError::WriteError)?;
+                    bytes.to_vec()
+                },
+            };
+            
+            Some(dek)
+        } else {
+            None
+        };
 
         Ok(Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
-            password: config.password.clone(),
+            password: dek,
         })
     }
 
@@ -135,7 +132,7 @@ impl Storage {
                     let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
                     
                     let mut map = self.transactions.borrow_mut();
-                    let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+                    let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
                     tx.put(&key, &value)
                         .map_err(|_| StorageError::WriteError)?;
                 }
@@ -215,7 +212,7 @@ impl Storage {
         transaction_id: Uuid,
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
         tx.delete(key.as_bytes())
             .map_err(|_| StorageError::WriteError)?;
 
@@ -244,7 +241,7 @@ impl Storage {
         transaction_id: Uuid,
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
         let mut data = value.as_bytes().to_vec();
 
         if self.password.is_some() {
@@ -354,7 +351,7 @@ impl Storage {
 
     pub fn commit_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
+        let tx = map.remove(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
 
         Ok(())
@@ -362,13 +359,13 @@ impl Storage {
 
     pub fn rollback_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
+        map.remove(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
         Ok(())
     }
 
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut cocoon = Cocoon::new(self.password.as_ref().unwrap().as_bytes());
+        let mut cocoon = Cocoon::new(self.password.as_ref().unwrap());
         cocoon
             .dump(data, &mut entry_cursor)
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
@@ -378,7 +375,7 @@ impl Storage {
     fn decrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let mut entry_cursor = Cursor::new(data);
 
-        let cocoon = Cocoon::new(self.password.as_ref().unwrap().as_bytes());
+        let cocoon = Cocoon::new(self.password.as_ref().unwrap());
         cocoon
             .parse(&mut entry_cursor)
             .map_err(|error| StorageError::FailedToDecryptData { error })
@@ -454,7 +451,7 @@ impl KeyValueStore for Storage {
 
             Ok(updated_value)
         } else {
-            Err(StorageError::NotFound)
+            Err(StorageError::NotFound("Value".to_string()))
         }
     }
 }
