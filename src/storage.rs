@@ -20,6 +20,7 @@ pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
     password: Option<Vec<u8>>,
+    password_policy: Option<PasswordPolicy>,
 }
 
 pub trait KeyValueStore {
@@ -66,7 +67,7 @@ impl Storage {
             config.path.as_str(),
         )?;
 
-        let dek = if let Some(ref password) = config.password {
+        let (dek, password_policy) = if let Some(ref password) = config.password {
             let password_policy = if let Some(ref policy) = config.password_policy {
                 PasswordPolicy::new(policy.clone())
             } else {
@@ -102,16 +103,58 @@ impl Storage {
                 },
             };
             
-            Some(dek)
+            (Some(dek), Some(password_policy))
         } else {
-            None
+            (None, None)
         };
 
         Ok(Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
             password: dek,
+            password_policy,
         })
+    }
+
+    pub fn change_password(
+        &self,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<(), StorageError> {
+        match &self.password_policy {
+            Some(policy) => {
+                if !policy.is_valid(new_password) {
+                    return Err(StorageError::WeakPassword(policy.clone()));
+                }
+            }
+            None => return Err(StorageError::NoPasswordSet),
+        }
+
+        let dek = match self.db.get(DEK_KEY).map_err(|_| StorageError::ReadError)? {
+            Some(encrypted_dek) => {
+                let mut entry_cursor = Cursor::new(encrypted_dek);
+
+                let cocoon = Cocoon::new(old_password.as_bytes());
+                let dek = cocoon
+                    .parse(&mut entry_cursor)
+                    .map_err(|_| StorageError::WrongPassword)?;
+
+                dek
+            }
+            None => return Err(StorageError::NotFound("DEK".to_string())),
+        };
+
+        let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+        let mut cocoon = Cocoon::new(new_password.as_bytes());
+        cocoon
+            .dump(dek, &mut entry_cursor)
+            .map_err(|error| StorageError::FailedToEncryptData { error })?;
+        let encrypted_dek = entry_cursor.into_inner();
+        self.db
+            .put(DEK_KEY.as_bytes(), encrypted_dek)
+            .map_err(|_| StorageError::WriteError)?;
+
+        Ok(())
     }
 
     pub fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P) -> Result<(), StorageError> {
@@ -787,6 +830,37 @@ mod tests {
 
         delete_storage(&path, store)?;
         Storage::delete_backup_file(backup_path).unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn test_change_password() -> Result<(), StorageError> {
+        let (path, _, store) = create_path_and_storage(true)?;
+        store.set("test1", "test_value1", None)?;
+
+        store.change_password("password", "new_password")?;
+        
+        drop(store);
+
+        let store = Storage::new(
+            &StorageConfig {
+                path: path.to_string_lossy().to_string(),
+                password: Some("new_password".to_string()),
+                password_policy: Some(PasswordPolicyConfig {
+                    min_length: 1,
+                    min_number_of_special_chars: 0,
+                    min_number_of_uppercase: 0,
+                    min_number_of_digits: 0,
+                }),
+            },
+        )?;
+
+        assert_eq!(
+            store.get::<String, String>("test1".to_string())?,
+            Some("test_value1".to_string())
+        );
+        delete_storage(&path, store)?;
+
         Ok(())
     }
 }

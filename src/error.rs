@@ -30,4 +30,6 @@ pub enum StorageError {
     RandomDekGenerationError(#[from] rand::rand_core::OsError),
     #[error("Wrong password provided")]
     WrongPassword,
+    #[error("No password set for the storage")]
+    NoPasswordSet,
 }

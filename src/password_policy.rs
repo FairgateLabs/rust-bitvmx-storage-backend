@@ -10,7 +10,7 @@ pub const SPECIAL: &[char] = &[
     '>', '?', '@', '[', ']', '^', '_', '{', '|', '}', '~',
 ];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PasswordPolicy {
     min_length: usize,
     min_number_of_special_chars: usize,
