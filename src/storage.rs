@@ -118,12 +118,12 @@ impl Storage {
 
     pub fn change_password(
         &self,
-        old_password: &str,
-        new_password: &str,
+        old_password: String,
+        new_password: String,
     ) -> Result<(), StorageError> {
         match &self.password_policy {
             Some(policy) => {
-                if !policy.is_valid(new_password) {
+                if !policy.is_valid(&new_password) {
                     return Err(StorageError::WeakPassword(policy.clone()));
                 }
             }
@@ -838,7 +838,7 @@ mod tests {
         let (path, _, store) = create_path_and_storage(true)?;
         store.set("test1", "test_value1", None)?;
 
-        store.change_password("password", "new_password")?;
+        store.change_password("password".to_string(), "new_password".to_string())?;
         
         drop(store);
 
