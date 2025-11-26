@@ -6,8 +6,8 @@ pub const UPPERCASE: &[char] = &[
 ];
 pub const DIGITS: &[char] = &['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 pub const SPECIAL: &[char] = &[
-    '!', '#', '$', '%', '&', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=',
-    '>', '?', '@', '[', ']', '^', '_', '{', '|', '}', '~',
+    '!', '#', '$', '%', '&', '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>', '?',
+    '@', '[', ']', '^', '_', '{', '|', '}', '~',
 ];
 
 #[derive(Debug, Clone)]
@@ -30,9 +30,7 @@ impl Default for PasswordPolicy {
 }
 
 impl PasswordPolicy {
-    pub fn new(
-        config: PasswordPolicyConfig
-    ) -> Self {
+    pub fn new(config: PasswordPolicyConfig) -> Self {
         PasswordPolicy {
             min_length: config.min_length,
             min_number_of_special_chars: config.min_number_of_special_chars,

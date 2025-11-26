@@ -1,6 +1,6 @@
+use crate::password_policy::PasswordPolicy;
 use std::io::Error as IoError;
 use thiserror::Error;
-use crate::password_policy::PasswordPolicy;
 
 #[derive(Error, Debug)]
 pub enum StorageError {

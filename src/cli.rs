@@ -1,8 +1,8 @@
-use storage_backend::storage::Storage; 
-use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use storage_backend::storage::Storage;
+use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
 
 use clap::{Parser, Subcommand};
 
@@ -89,8 +89,12 @@ impl Action {
             Action::ListKeys(args) => &args.storage_path,
             Action::Backup(args) => &args.storage_settings.storage_path,
             Action::RestoreBackup(args) => &args.storage_settings.storage_path,
-            Action::ChangePassword { storage_settings, .. } => &storage_settings.storage_path,
-            Action::Dump { storage_settings, .. } => &storage_settings.storage_path,
+            Action::ChangePassword {
+                storage_settings, ..
+            } => &storage_settings.storage_path,
+            Action::Dump {
+                storage_settings, ..
+            } => &storage_settings.storage_path,
         }
     }
 
@@ -105,15 +109,21 @@ impl Action {
             Action::ListKeys(args) => args.password.clone(),
             Action::Backup(args) => args.storage_settings.password.clone(),
             Action::RestoreBackup(args) => args.storage_settings.password.clone(),
-            Action::ChangePassword { storage_settings, .. } => storage_settings.password.clone(),
-            Action::Dump { storage_settings, .. } => storage_settings.password.clone(),
+            Action::ChangePassword {
+                storage_settings, ..
+            } => storage_settings.password.clone(),
+            Action::Dump {
+                storage_settings, ..
+            } => storage_settings.password.clone(),
         }
     }
 
     fn get_password_policy_config(&self) -> Option<PasswordPolicyConfig> {
         match self {
             Action::New(args) => args.password_policy_config.clone(),
-            Action::ChangePassword { storage_settings, .. } => storage_settings.password_policy_config.clone(),
+            Action::ChangePassword {
+                storage_settings, ..
+            } => storage_settings.password_policy_config.clone(),
             _ => None,
         }
     }
@@ -144,7 +154,6 @@ fn parse_password_policy_config(str: &str) -> Result<PasswordPolicyConfig, Strin
         min_number_of_uppercase,
         min_number_of_digits,
     })
-    
 }
 
 pub fn run(args: Cli) -> Result<(), String> {
@@ -251,9 +260,11 @@ pub fn run(args: Cli) -> Result<(), String> {
         } => {
             let old_password = match storage_settings.password {
                 Some(pw) => pw,
-                None => return Err("Current password must be provided to change password".to_string()),
-                
+                None => {
+                    return Err("Current password must be provided to change password".to_string())
+                }
             };
+
             storage
                 .change_password(old_password, new_password)
                 .map_err(|e| e.to_string())?;

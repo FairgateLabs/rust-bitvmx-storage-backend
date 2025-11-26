@@ -1,5 +1,6 @@
 use crate::{error::StorageError, password_policy::PasswordPolicy, storage_config::StorageConfig};
 use cocoon::Cocoon;
+use rand::{rngs::OsRng, TryRngCore};
 use rocksdb::TransactionDB;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -11,7 +12,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
-use rand::{TryRngCore, rngs::OsRng};
 
 const DEK_KEY: &str = "DEK";
 
@@ -83,10 +83,11 @@ impl Storage {
 
                     let cocoon = Cocoon::new(password.as_bytes());
                     let dek = cocoon
-                        .parse(&mut entry_cursor).map_err(|_| StorageError::WrongPassword)?;
-                    
+                        .parse(&mut entry_cursor)
+                        .map_err(|_| StorageError::WrongPassword)?;
+
                     dek
-                },
+                }
                 None => {
                     let mut bytes = [0u8; 32];
                     OsRng.try_fill_bytes(&mut bytes)?;
@@ -100,9 +101,9 @@ impl Storage {
                     db.put(DEK_KEY.as_bytes(), encrypted_dek)
                         .map_err(|_| StorageError::WriteError)?;
                     bytes.to_vec()
-                },
+                }
             };
-            
+
             (Some(dek), Some(password_policy))
         } else {
             (None, None)
@@ -167,21 +168,22 @@ impl Storage {
                 buf.pop();
                 let mut parts = buf.splitn(2, |&b| b == b',');
                 if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                    let key =
-                        String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    let value =
-                        String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let key = String::from_utf8(key.to_vec())
+                        .map_err(|_| StorageError::ConversionError)?;
+                    let value = String::from_utf8(value.to_vec())
+                        .map_err(|_| StorageError::ConversionError)?;
                     let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
                     let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
-                    
+
                     let mut map = self.transactions.borrow_mut();
-                    let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                    tx.put(&key, &value)
-                        .map_err(|_| StorageError::WriteError)?;
+                    let tx = map
+                        .get_mut(&transaction_id)
+                        .ok_or(StorageError::NotFound("Transaction".to_string()))?;
+                    tx.put(&key, &value).map_err(|_| StorageError::WriteError)?;
                 }
                 buf.clear();
             }
-            Ok(())  
+            Ok(())
         };
 
         if result.is_err() {
@@ -255,7 +257,9 @@ impl Storage {
         transaction_id: Uuid,
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
+        let tx = map
+            .get_mut(&transaction_id)
+            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         tx.delete(key.as_bytes())
             .map_err(|_| StorageError::WriteError)?;
 
@@ -284,7 +288,9 @@ impl Storage {
         transaction_id: Uuid,
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
+        let tx = map
+            .get_mut(&transaction_id)
+            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         let mut data = value.as_bytes().to_vec();
 
         if self.password.is_some() {
@@ -394,7 +400,9 @@ impl Storage {
 
     pub fn commit_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.remove(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
+        let tx = map
+            .remove(&transaction_id)
+            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
 
         Ok(())
@@ -402,7 +410,8 @@ impl Storage {
 
     pub fn rollback_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        map.remove(&transaction_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
+        map.remove(&transaction_id)
+            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         Ok(())
     }
 
@@ -839,21 +848,19 @@ mod tests {
         store.set("test1", "test_value1", None)?;
 
         store.change_password("password".to_string(), "new_password".to_string())?;
-        
+
         drop(store);
 
-        let store = Storage::new(
-            &StorageConfig {
-                path: path.to_string_lossy().to_string(),
-                password: Some("new_password".to_string()),
-                password_policy: Some(PasswordPolicyConfig {
-                    min_length: 1,
-                    min_number_of_special_chars: 0,
-                    min_number_of_uppercase: 0,
-                    min_number_of_digits: 0,
-                }),
-            },
-        )?;
+        let store = Storage::new(&StorageConfig {
+            path: path.to_string_lossy().to_string(),
+            password: Some("new_password".to_string()),
+            password_policy: Some(PasswordPolicyConfig {
+                min_length: 1,
+                min_number_of_special_chars: 0,
+                min_number_of_uppercase: 0,
+                min_number_of_digits: 0,
+            }),
+        })?;
 
         assert_eq!(
             store.get::<String, String>("test1".to_string())?,
