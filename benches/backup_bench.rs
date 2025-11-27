@@ -34,12 +34,6 @@ fn create_path_and_storage(
     Ok((path.clone(), config, storage))
 }
 
-fn delete_storage(path: &PathBuf, storage: Storage) -> Result<(), StorageError> {
-    drop(storage);
-    Storage::delete_db_files(path)?;
-    Ok(())
-}
-
 fn write_db(storage: &Storage, number_of_items: usize) {
     let tx = storage.begin_transaction();
     for i in 0..number_of_items {
@@ -64,7 +58,7 @@ fn bench_create_storage(c: &mut Criterion) {
         },
     );
 
-    delete_storage(&path, storage).unwrap();
+    Storage::delete_db_files(storage).unwrap();
     group.finish();
 }
 
@@ -84,8 +78,8 @@ fn bench_create_backup(c: &mut Criterion) {
             });
         });
 
-    delete_storage(&storage_path, storage).unwrap();
-    Storage::delete_backup_file(backup_path).unwrap();
+    Storage::delete_db_files(storage).unwrap();
+    fs::remove_file(backup_path).unwrap();
     group.finish();
 }
 
@@ -109,8 +103,8 @@ fn bench_restore_backup(c: &mut Criterion) {
         },
     );
 
-    delete_storage(&path, store).unwrap();
-    Storage::delete_backup_file(backup_path).unwrap();
+    Storage::delete_db_files(store).unwrap();
+    fs::remove_file(backup_path).unwrap();
     group.finish();
 }
 
