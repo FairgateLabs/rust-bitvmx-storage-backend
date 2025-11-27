@@ -1,4 +1,4 @@
-use crate::{error::StorageError, password_policy::PasswordPolicy, storage_config::StorageConfig};
+use crate::{error::StorageError, password_policy::PasswordPolicy, storage_config::{PasswordPolicyConfig, StorageConfig}};
 use cocoon::Cocoon;
 use rand::{rngs::OsRng, TryRngCore};
 use rocksdb::TransactionDB;
@@ -46,19 +46,37 @@ pub trait KeyValueStore {
 }
 
 impl Storage {
+    pub fn new_with_policy(
+        config: &StorageConfig,
+        password_policy_config: Option<PasswordPolicyConfig>,
+    ) -> Result<Storage, StorageError> {
+        let mut options = create_options();
+        options.create_if_missing(true);
+        Self::open_db(config, password_policy_config, &options)
+    }
+
+    pub fn open_with_policy(
+        config: &StorageConfig,
+        password_policy_config: Option<PasswordPolicyConfig>,
+    ) -> Result<Storage, StorageError> {
+        let options = create_options();
+        Self::open_db(config, password_policy_config, &options)
+    }
+
     pub fn new(config: &StorageConfig) -> Result<Storage, StorageError> {
         let mut options = create_options();
         options.create_if_missing(true);
-        Self::open_db(config, &options)
+        Self::open_db(config, None, &options)
     }
 
     pub fn open(config: &StorageConfig) -> Result<Storage, StorageError> {
         let options = create_options();
-        Self::open_db(config, &options)
+        Self::open_db(config, None, &options)
     }
 
     fn open_db(
         config: &StorageConfig,
+        password_policy_config: Option<PasswordPolicyConfig>,
         options: &rocksdb::Options,
     ) -> Result<Storage, StorageError> {
         let db = rocksdb::TransactionDB::open(
@@ -68,7 +86,7 @@ impl Storage {
         )?;
 
         let (dek, password_policy) = if let Some(ref password) = config.password {
-            let password_policy = if let Some(ref policy) = config.password_policy {
+            let password_policy = if let Some(ref policy) = password_policy_config {
                 PasswordPolicy::new(policy.clone())
             } else {
                 PasswordPolicy::default()
@@ -538,19 +556,24 @@ mod tests {
             None
         };
 
-        let password_policy = PasswordPolicyConfig {
-            min_length: 1,
-            min_number_of_special_chars: 0,
-            min_number_of_uppercase: 0,
-            min_number_of_digits: 0,
-        };
-
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             password,
-            password_policy: Some(password_policy),
         };
-        let storage = Storage::new(&config)?;
+        
+        let storage = if is_encrypted{
+            Storage::new_with_policy(
+                &config,
+                Some(PasswordPolicyConfig {
+                    min_length: 1,
+                    min_number_of_special_chars: 0,
+                    min_number_of_uppercase: 0,
+                    min_number_of_digits: 0,
+                }),
+            )?
+        } else {
+            Storage::new(&config)?
+        };
 
         Ok((path.clone(), config, storage))
     }
@@ -650,17 +673,10 @@ mod tests {
     #[test]
     fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
-        let password_policy = PasswordPolicyConfig {
-            min_length: 1,
-            min_number_of_special_chars: 0,
-            min_number_of_uppercase: 0,
-            min_number_of_digits: 0,
-        };
 
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             password: Some("password".to_string()),
-            password_policy: Some(password_policy),
         };
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());
@@ -844,23 +860,24 @@ mod tests {
 
     #[test]
     fn test_change_password() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(true)?;
+        let (path, _, store) = create_path_and_storage(true,)?;
         store.set("test1", "test_value1", None)?;
 
         store.change_password("password".to_string(), "new_password".to_string())?;
 
         drop(store);
 
-        let store = Storage::new(&StorageConfig {
+        let store = Storage::new_with_policy(&StorageConfig {
             path: path.to_string_lossy().to_string(),
             password: Some("new_password".to_string()),
-            password_policy: Some(PasswordPolicyConfig {
+            },
+            Some(PasswordPolicyConfig {
                 min_length: 1,
                 min_number_of_special_chars: 0,
                 min_number_of_uppercase: 0,
                 min_number_of_digits: 0,
             }),
-        })?;
+        )?;
 
         assert_eq!(
             store.get::<String, String>("test1".to_string())?,

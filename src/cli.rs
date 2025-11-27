@@ -161,10 +161,15 @@ pub fn run(args: Cli) -> Result<(), String> {
         Action::New(storage_settings) => {
             let path = storage_settings.storage_path.to_string_lossy().to_string();
             let password = storage_settings.password;
-            let password_policy_config = storage_settings.password_policy_config;
-            let config = StorageConfig::new(path, password, password_policy_config);
+            let config = StorageConfig::new(path, password);
 
-            Storage::new(&config).map_err(|e| e.to_string())?;
+            if let Some(password_policy) = storage_settings.password_policy_config {
+                Storage::new_with_policy(&config, Some(password_policy))
+                    .map_err(|e| e.to_string())?;
+            } else {
+                Storage::new(&config).map_err(|e| e.to_string())?;
+            }
+
             println!("Created new storage at {:?}", storage_settings.storage_path);
             return Ok(());
         }
@@ -172,9 +177,12 @@ pub fn run(args: Cli) -> Result<(), String> {
             let config = StorageConfig::new(
                 args.action.get_storage_path().to_string_lossy().to_string(),
                 args.action.get_encryption_password(),
-                args.action.get_password_policy_config(),
             );
-            Storage::open(&config).map_err(|e| e.to_string())?
+            if let Some(password_policy) = args.action.get_password_policy_config() {
+                Storage::open_with_policy(&config, Some(password_policy)).map_err(|e| e.to_string())?
+            } else {
+                Storage::open(&config).map_err(|e| e.to_string())?
+            }
         }
     };
 

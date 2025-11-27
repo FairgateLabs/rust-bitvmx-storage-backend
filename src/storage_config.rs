@@ -12,19 +12,16 @@ pub struct PasswordPolicyConfig {
 pub struct StorageConfig {
     pub path: String,
     pub password: Option<String>,
-    pub password_policy: Option<PasswordPolicyConfig>,
 }
 
 impl StorageConfig {
     pub fn new(
         path: String,
         password: Option<String>,
-        password_policy: Option<PasswordPolicyConfig>,
     ) -> Self {
         Self {
             path,
             password,
-            password_policy,
         }
     }
 }
