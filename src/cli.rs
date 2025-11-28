@@ -1,8 +1,8 @@
-use storage_backend::storage::Storage; 
-use storage_backend::storage_config::StorageConfig;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use storage_backend::storage::Storage;
+use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
 
 use clap::{Parser, Subcommand};
 
@@ -15,9 +15,13 @@ pub struct Cli {
 }
 
 #[derive(Parser, Debug, Clone)]
-struct StoragePath {
+struct StorageSettings {
     #[clap(short, long, default_value = "storage.db")]
     storage_path: PathBuf,
+    #[clap(short, long)]
+    password: Option<String>,
+    #[clap(short, long, value_parser = parse_password_policy_config)]
+    password_policy_config: Option<PasswordPolicyConfig>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -25,7 +29,7 @@ struct BackupPath {
     #[clap(short, long, default_value = "backup")]
     backup_path: PathBuf,
     #[clap(flatten)]
-    storage_path: StoragePath,
+    storage_settings: StorageSettings,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -33,7 +37,7 @@ struct StorageAndKey {
     #[clap(short, long)]
     key: String,
     #[clap(flatten)]
-    storage_path: StoragePath,
+    storage_settings: StorageSettings,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -43,23 +47,29 @@ struct StorageKeyValue {
     #[clap(short, long)]
     value: String,
     #[clap(flatten)]
-    storage_path: StoragePath,
+    storage_settings: StorageSettings,
 }
 
 #[derive(Subcommand, Debug)]
 enum Action {
-    New(StoragePath),
+    New(StorageSettings),
     Write(StorageKeyValue),
     Read(StorageAndKey),
     Delete(StorageAndKey),
     PartialCompare(StorageAndKey),
     Contains(StorageAndKey),
-    ListKeys(StoragePath),
+    ListKeys(StorageSettings),
     Backup(BackupPath),
     RestoreBackup(BackupPath),
+    ChangePassword {
+        #[clap(flatten)]
+        storage_settings: StorageSettings,
+        #[clap(short, long)]
+        new_password: String,
+    },
     Dump {
         #[clap(flatten)]
-        storage_path: StoragePath,
+        storage_settings: StorageSettings,
         #[clap(short, long, default_value = "dump.json")]
         dump_file: PathBuf,
         #[clap(short, long, default_value = "false")]
@@ -71,46 +81,114 @@ impl Action {
     fn get_storage_path(&self) -> &PathBuf {
         match self {
             Action::New(args) => &args.storage_path,
-            Action::Write(args) => &args.storage_path.storage_path,
-            Action::Read(args) => &args.storage_path.storage_path,
-            Action::Delete(args) => &args.storage_path.storage_path,
-            Action::PartialCompare(args) => &args.storage_path.storage_path,
-            Action::Contains(args) => &args.storage_path.storage_path,
+            Action::Write(args) => &args.storage_settings.storage_path,
+            Action::Read(args) => &args.storage_settings.storage_path,
+            Action::Delete(args) => &args.storage_settings.storage_path,
+            Action::PartialCompare(args) => &args.storage_settings.storage_path,
+            Action::Contains(args) => &args.storage_settings.storage_path,
             Action::ListKeys(args) => &args.storage_path,
-            Action::Backup(args) => &args.storage_path.storage_path,
-            Action::RestoreBackup(args) => &args.storage_path.storage_path,
-            Action::Dump { storage_path, .. } => &storage_path.storage_path,
+            Action::Backup(args) => &args.storage_settings.storage_path,
+            Action::RestoreBackup(args) => &args.storage_settings.storage_path,
+            Action::ChangePassword {
+                storage_settings, ..
+            } => &storage_settings.storage_path,
+            Action::Dump {
+                storage_settings, ..
+            } => &storage_settings.storage_path,
+        }
+    }
+
+    fn get_encryption_password(&self) -> Option<String> {
+        match self {
+            Action::New(args) => args.password.clone(),
+            Action::Write(args) => args.storage_settings.password.clone(),
+            Action::Read(args) => args.storage_settings.password.clone(),
+            Action::Delete(args) => args.storage_settings.password.clone(),
+            Action::PartialCompare(args) => args.storage_settings.password.clone(),
+            Action::Contains(args) => args.storage_settings.password.clone(),
+            Action::ListKeys(args) => args.password.clone(),
+            Action::Backup(args) => args.storage_settings.password.clone(),
+            Action::RestoreBackup(args) => args.storage_settings.password.clone(),
+            Action::ChangePassword {
+                storage_settings, ..
+            } => storage_settings.password.clone(),
+            Action::Dump {
+                storage_settings, ..
+            } => storage_settings.password.clone(),
+        }
+    }
+
+    fn get_password_policy_config(&self) -> Option<PasswordPolicyConfig> {
+        match self {
+            Action::New(args) => args.password_policy_config.clone(),
+            Action::ChangePassword {
+                storage_settings, ..
+            } => storage_settings.password_policy_config.clone(),
+            _ => None,
         }
     }
 }
 
+fn parse_password_policy_config(str: &str) -> Result<PasswordPolicyConfig, String> {
+    let parts: Vec<&str> = str.split(',').collect();
+    if parts.len() != 4 {
+        return Err("To create Password Policy must have 4 comma-separated values".to_string());
+    }
+
+    let min_length = parts[0]
+        .parse::<usize>()
+        .map_err(|_| "Invalid min_length".to_string())?;
+    let min_number_of_special_chars = parts[1]
+        .parse::<usize>()
+        .map_err(|_| "Invalid min_number_of_special_chars".to_string())?;
+    let min_number_of_uppercase = parts[2]
+        .parse::<usize>()
+        .map_err(|_| "Invalid min_number_of_uppercase".to_string())?;
+    let min_number_of_digits = parts[3]
+        .parse::<usize>()
+        .map_err(|_| "Invalid min_number_of_digits".to_string())?;
+
+    Ok(PasswordPolicyConfig {
+        min_length,
+        min_number_of_special_chars,
+        min_number_of_uppercase,
+        min_number_of_digits,
+    })
+}
+
 pub fn run(args: Cli) -> Result<(), String> {
     let storage = match args.action {
-        Action::New(storage_path) => {
-            let path = storage_path.storage_path.to_string_lossy().to_string();
-            let config = StorageConfig::new(path, None);
+        Action::New(storage_settings) => {
+            let path = storage_settings.storage_path.to_string_lossy().to_string();
+            let password = storage_settings.password;
+            let config = StorageConfig::new(path, password);
 
-            Storage::new(&config).map_err(|e| e.to_string())?;
-            println!("Created new storage at {:?}", storage_path.storage_path);
+            if let Some(password_policy) = storage_settings.password_policy_config {
+                Storage::new_with_policy(&config, Some(password_policy))
+                    .map_err(|e| e.to_string())?;
+            } else {
+                Storage::new(&config).map_err(|e| e.to_string())?;
+            }
+
+            println!("Created new storage at {:?}", storage_settings.storage_path);
             return Ok(());
         }
         _ => {
             let config = StorageConfig::new(
                 args.action.get_storage_path().to_string_lossy().to_string(),
-                None,
+                args.action.get_encryption_password(),
             );
-            Storage::open(&config).map_err(|e| e.to_string())?
+            if let Some(password_policy) = args.action.get_password_policy_config() {
+                Storage::open_with_policy(&config, Some(password_policy)).map_err(|e| e.to_string())?
+            } else {
+                Storage::open(&config).map_err(|e| e.to_string())?
+            }
         }
     };
 
     match args.action {
-        Action::New(storage_path) => {
-            let config = StorageConfig::new(
-                storage_path.storage_path.to_string_lossy().to_string(),
-                None,
-            );
-            Storage::new(&config).map_err(|e| e.to_string())?;
-            println!("Created new storage at {:?}", storage_path.storage_path);
+        Action::New(_) => {
+            eprintln!("Already handled above");
         }
         Action::Write(storage_key_value) => {
             storage
@@ -118,7 +196,7 @@ pub fn run(args: Cli) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!(
                 "Wrote key {} with value {} to {:?}",
-                storage_key_value.key, storage_key_value.value, storage_key_value.storage_path
+                storage_key_value.key, storage_key_value.value, storage_key_value.storage_settings
             );
         }
         Action::Read(storage_and_key) => {
@@ -128,11 +206,11 @@ pub fn run(args: Cli) -> Result<(), String> {
             {
                 Some(value) => println!(
                     "Read key {} with value {} from {:?}",
-                    storage_and_key.key, value, storage_and_key.storage_path
+                    storage_and_key.key, value, storage_and_key.storage_settings
                 ),
                 None => println!(
                     "Key {} not found in {:?}",
-                    storage_and_key.key, storage_and_key.storage_path
+                    storage_and_key.key, storage_and_key.storage_settings
                 ),
             }
         }
@@ -142,7 +220,7 @@ pub fn run(args: Cli) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!(
                 "Deleted key {} from {:?}",
-                storage_and_key.key, storage_and_key.storage_path
+                storage_and_key.key, storage_and_key.storage_settings
             );
         }
         Action::PartialCompare(storage_and_key) => {
@@ -151,7 +229,7 @@ pub fn run(args: Cli) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!(
                 "Keys partially matching {} in {:?}: {:?}",
-                storage_and_key.key, storage_and_key.storage_path, keys
+                storage_and_key.key, storage_and_key.storage_settings, keys
             );
         }
         Action::Contains(storage_and_key) => {
@@ -162,12 +240,12 @@ pub fn run(args: Cli) -> Result<(), String> {
                 "Key {} {} in {:?}",
                 storage_and_key.key,
                 if contains { "exists" } else { "does not exist" },
-                storage_and_key.storage_path
+                storage_and_key.storage_settings
             );
         }
-        Action::ListKeys(_storage) => {
+        Action::ListKeys(storage_settings) => {
             let keys = storage.keys().map_err(|e| e.to_string())?;
-            println!("Listing keys in: {:?}", _storage.storage_path);
+            println!("Listing keys in: {:?}", storage_settings.storage_path);
             for key in keys {
                 println!("{}", key);
             }
@@ -184,8 +262,27 @@ pub fn run(args: Cli) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             println!("Backup restored from {:?}", backup.backup_path);
         }
+        Action::ChangePassword {
+            storage_settings,
+            new_password,
+        } => {
+            let old_password = match storage_settings.password {
+                Some(pw) => pw,
+                None => {
+                    return Err("Current password must be provided to change password".to_string())
+                }
+            };
+
+            storage
+                .change_password(old_password, new_password)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "Password changed for storage at {:?}",
+                storage_settings.storage_path
+            );
+        }
         Action::Dump {
-            storage_path: _,
+            storage_settings: _,
             dump_file,
             pretty,
         } => {

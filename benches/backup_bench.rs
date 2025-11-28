@@ -1,7 +1,11 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rng, RngCore};
-use std::{env, fs, path::PathBuf};
-use storage_backend::{error::StorageError, storage::Storage, storage_config::StorageConfig};
+use std::{env, path::PathBuf};
+use storage_backend::{
+    error::StorageError,
+    storage::Storage,
+    storage_config::StorageConfig,
+};
 
 fn temp_storage() -> PathBuf {
     let dir = env::temp_dir();
@@ -18,19 +22,12 @@ fn backup_temp_storage() -> PathBuf {
 }
 
 fn create_path_and_storage(
-    is_encrypted: bool,
 ) -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
     let path = &temp_storage();
 
-    let password = if is_encrypted {
-        Some("password".to_string())
-    } else {
-        None
-    };
-
     let config = StorageConfig {
         path: path.to_string_lossy().to_string(),
-        password,
+        password: None,
     };
     let storage = Storage::new(&config)?;
 
@@ -50,7 +47,7 @@ fn write_db(storage: &Storage, number_of_items: usize) {
 fn bench_create_storage(c: &mut Criterion) {
     let mut group = c.benchmark_group("backup");
     let number_of_items = 1_000_000;
-    let (_, _, storage) = create_path_and_storage(false).unwrap();
+    let (path, _, storage) = create_path_and_storage().unwrap();
 
     group.sample_size(10).bench_function(
         BenchmarkId::new("create_storage", number_of_items),
@@ -70,7 +67,7 @@ fn bench_create_backup(c: &mut Criterion) {
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
 
-    let (_, _, storage) = create_path_and_storage(false).unwrap();
+    let (storage_path, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
 
     group
@@ -91,11 +88,11 @@ fn bench_restore_backup(c: &mut Criterion) {
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
 
-    let (_, _, storage) = create_path_and_storage(false).unwrap();
+    let (storage_path, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
     storage.backup(backup_path.clone()).unwrap();
-    Storage::delete_db_files(storage).unwrap();
-    let (_, _, store) = create_path_and_storage(false).unwrap();
+    delete_storage(&storage_path, storage).unwrap();
+    let (path, _, store) = create_path_and_storage().unwrap();
 
     group.sample_size(10).bench_function(
         BenchmarkId::new("restore_backup", number_of_items),

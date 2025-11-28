@@ -1,10 +1,11 @@
+use crate::password_policy::PasswordPolicy;
 use std::io::Error as IoError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
-    #[error("Document not found")]
-    NotFound,
+    #[error("Value not found {0}")]
+    NotFound(String),
     #[error("Error modifying storage")]
     WriteError,
     #[error("Error reading from storage")]
@@ -23,4 +24,12 @@ pub enum StorageError {
     FailedToEncryptData { error: cocoon::Error },
     #[error("Failed to decrypt data")]
     FailedToDecryptData { error: cocoon::Error },
+    #[error("Password does not meet complexity requirements. Required policy: {0:?}")]
+    WeakPassword(PasswordPolicy),
+    #[error("Error generating random DEK: {0}")]
+    RandomDekGenerationError(#[from] rand::rand_core::OsError),
+    #[error("Wrong password provided")]
+    WrongPassword,
+    #[error("No password set for the storage")]
+    NoPasswordSet,
 }

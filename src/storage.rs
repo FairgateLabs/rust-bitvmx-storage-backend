@@ -1,5 +1,6 @@
-use crate::{error::StorageError, storage_config::StorageConfig};
+use crate::{error::StorageError, password_policy::PasswordPolicy, storage_config::{PasswordPolicyConfig, StorageConfig}};
 use cocoon::Cocoon;
+use rand::{rngs::OsRng, TryRngCore};
 use rocksdb::TransactionDB;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -12,11 +13,14 @@ use std::{
 };
 use uuid::Uuid;
 
+const DEK_KEY: &str = "DEK";
+
 /// Storage is limited to single threaded access due to the use of RefCell for transaction management.
 pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
-    password: Option<String>,
+    password: Option<Vec<u8>>,
+    password_policy: Option<PasswordPolicy>,
 }
 
 pub trait KeyValueStore {
@@ -42,19 +46,37 @@ pub trait KeyValueStore {
 }
 
 impl Storage {
+    pub fn new_with_policy(
+        config: &StorageConfig,
+        password_policy_config: Option<PasswordPolicyConfig>,
+    ) -> Result<Storage, StorageError> {
+        let mut options = create_options();
+        options.create_if_missing(true);
+        Self::open_db(config, password_policy_config, &options)
+    }
+
+    pub fn open_with_policy(
+        config: &StorageConfig,
+        password_policy_config: Option<PasswordPolicyConfig>,
+    ) -> Result<Storage, StorageError> {
+        let options = create_options();
+        Self::open_db(config, password_policy_config, &options)
+    }
+
     pub fn new(config: &StorageConfig) -> Result<Storage, StorageError> {
         let mut options = create_options();
         options.create_if_missing(true);
-        Self::open_db(config, &options)
+        Self::open_db(config, None, &options)
     }
 
     pub fn open(config: &StorageConfig) -> Result<Storage, StorageError> {
         let options = create_options();
-        Self::open_db(config, &options)
+        Self::open_db(config, None, &options)
     }
 
     fn open_db(
         config: &StorageConfig,
+        password_policy_config: Option<PasswordPolicyConfig>,
         options: &rocksdb::Options,
     ) -> Result<Storage, StorageError> {
         let db = rocksdb::TransactionDB::open(
@@ -63,11 +85,95 @@ impl Storage {
             config.path.as_str(),
         )?;
 
+        let (dek, password_policy) = if let Some(ref password) = config.password {
+            let password_policy = if let Some(ref policy) = password_policy_config {
+                PasswordPolicy::new(policy.clone())
+            } else {
+                PasswordPolicy::default()
+            };
+
+            if !password_policy.is_valid(password) {
+                return Err(StorageError::WeakPassword(password_policy));
+            }
+            let dek = match db.get(DEK_KEY).map_err(|_| StorageError::ReadError)? {
+                Some(encrypted_dek) => {
+                    let mut entry_cursor = Cursor::new(encrypted_dek);
+
+                    let cocoon = Cocoon::new(password.as_bytes());
+                    let dek = cocoon
+                        .parse(&mut entry_cursor)
+                        .map_err(|_| StorageError::WrongPassword)?;
+
+                    dek
+                }
+                None => {
+                    let mut bytes = [0u8; 32];
+                    OsRng.try_fill_bytes(&mut bytes)?;
+
+                    let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+                    let mut cocoon = Cocoon::new(password.as_bytes());
+                    cocoon
+                        .dump(bytes.to_vec(), &mut entry_cursor)
+                        .map_err(|error| StorageError::FailedToEncryptData { error })?;
+                    let encrypted_dek = entry_cursor.into_inner();
+                    db.put(DEK_KEY.as_bytes(), encrypted_dek)
+                        .map_err(|_| StorageError::WriteError)?;
+                    bytes.to_vec()
+                }
+            };
+
+            (Some(dek), Some(password_policy))
+        } else {
+            (None, None)
+        };
+
         Ok(Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
-            password: config.password.clone(),
+            password: dek,
+            password_policy,
         })
+    }
+
+    pub fn change_password(
+        &self,
+        old_password: String,
+        new_password: String,
+    ) -> Result<(), StorageError> {
+        match &self.password_policy {
+            Some(policy) => {
+                if !policy.is_valid(&new_password) {
+                    return Err(StorageError::WeakPassword(policy.clone()));
+                }
+            }
+            None => return Err(StorageError::NoPasswordSet),
+        }
+
+        let dek = match self.db.get(DEK_KEY).map_err(|_| StorageError::ReadError)? {
+            Some(encrypted_dek) => {
+                let mut entry_cursor = Cursor::new(encrypted_dek);
+
+                let cocoon = Cocoon::new(old_password.as_bytes());
+                let dek = cocoon
+                    .parse(&mut entry_cursor)
+                    .map_err(|_| StorageError::WrongPassword)?;
+
+                dek
+            }
+            None => return Err(StorageError::NotFound("DEK".to_string())),
+        };
+
+        let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+        let mut cocoon = Cocoon::new(new_password.as_bytes());
+        cocoon
+            .dump(dek, &mut entry_cursor)
+            .map_err(|error| StorageError::FailedToEncryptData { error })?;
+        let encrypted_dek = entry_cursor.into_inner();
+        self.db
+            .put(DEK_KEY.as_bytes(), encrypted_dek)
+            .map_err(|_| StorageError::WriteError)?;
+
+        Ok(())
     }
 
     pub fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P) -> Result<(), StorageError> {
@@ -80,21 +186,22 @@ impl Storage {
                 buf.pop();
                 let mut parts = buf.splitn(2, |&b| b == b',');
                 if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-                    let key =
-                        String::from_utf8(key.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    let value =
-                        String::from_utf8(value.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let key = String::from_utf8(key.to_vec())
+                        .map_err(|_| StorageError::ConversionError)?;
+                    let value = String::from_utf8(value.to_vec())
+                        .map_err(|_| StorageError::ConversionError)?;
                     let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
                     let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
-                    
+
                     let mut map = self.transactions.borrow_mut();
-                    let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
-                    tx.put(&key, &value)
-                        .map_err(|_| StorageError::WriteError)?;
+                    let tx = map
+                        .get_mut(&transaction_id)
+                        .ok_or(StorageError::NotFound("Transaction".to_string()))?;
+                    tx.put(&key, &value).map_err(|_| StorageError::WriteError)?;
                 }
                 buf.clear();
             }
-            Ok(())  
+            Ok(())
         };
 
         if result.is_err() {
@@ -165,7 +272,9 @@ impl Storage {
         transaction_id: Uuid,
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+        let tx = map
+            .get_mut(&transaction_id)
+            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         tx.delete(key.as_bytes())
             .map_err(|_| StorageError::WriteError)?;
 
@@ -194,7 +303,9 @@ impl Storage {
         transaction_id: Uuid,
     ) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.get_mut(&transaction_id).ok_or(StorageError::NotFound)?;
+        let tx = map
+            .get_mut(&transaction_id)
+            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         let mut data = value.as_bytes().to_vec();
 
         if self.password.is_some() {
@@ -309,7 +420,9 @@ impl Storage {
 
     pub fn commit_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        let tx = map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
+        let tx = map
+            .remove(&transaction_id)
+            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         tx.commit().map_err(|_| StorageError::CommitError)?;
 
         Ok(())
@@ -317,13 +430,14 @@ impl Storage {
 
     pub fn rollback_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
-        map.remove(&transaction_id).ok_or(StorageError::NotFound)?;
+        map.remove(&transaction_id)
+            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         Ok(())
     }
 
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut cocoon = Cocoon::new(self.password.as_ref().unwrap().as_bytes());
+        let mut cocoon = Cocoon::new(self.password.as_ref().unwrap());
         cocoon
             .dump(data, &mut entry_cursor)
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
@@ -333,7 +447,7 @@ impl Storage {
     fn decrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let mut entry_cursor = Cursor::new(data);
 
-        let cocoon = Cocoon::new(self.password.as_ref().unwrap().as_bytes());
+        let cocoon = Cocoon::new(self.password.as_ref().unwrap());
         cocoon
             .parse(&mut entry_cursor)
             .map_err(|error| StorageError::FailedToDecryptData { error })
@@ -409,7 +523,7 @@ impl KeyValueStore for Storage {
 
             Ok(updated_value)
         } else {
-            Err(StorageError::NotFound)
+            Err(StorageError::NotFound("Value".to_string()))
         }
     }
 }
@@ -422,6 +536,7 @@ fn create_options() -> rocksdb::Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage_config::PasswordPolicyConfig;
     use rand::{rng, RngCore};
     use std::env;
 
@@ -447,7 +562,20 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             password,
         };
-        let storage = Storage::new(&config)?;
+        
+        let storage = if is_encrypted{
+            Storage::new_with_policy(
+                &config,
+                Some(PasswordPolicyConfig {
+                    min_length: 1,
+                    min_number_of_special_chars: 0,
+                    min_number_of_uppercase: 0,
+                    min_number_of_digits: 0,
+                }),
+            )?
+        } else {
+            Storage::new(&config)?
+        };
 
         Ok((path.clone(), config, storage))
     }
@@ -541,6 +669,7 @@ mod tests {
     #[test]
     fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
+
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
             password: Some("password".to_string()),
@@ -722,6 +851,36 @@ mod tests {
 
         Storage::delete_db_files(store)?;
         fs::remove_file(backup_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_change_password() -> Result<(), StorageError> {
+        let (path, _, store) = create_path_and_storage(true,)?;
+        store.set("test1", "test_value1", None)?;
+
+        store.change_password("password".to_string(), "new_password".to_string())?;
+
+        drop(store);
+
+        let store = Storage::new_with_policy(&StorageConfig {
+            path: path.to_string_lossy().to_string(),
+            password: Some("new_password".to_string()),
+            },
+            Some(PasswordPolicyConfig {
+                min_length: 1,
+                min_number_of_special_chars: 0,
+                min_number_of_uppercase: 0,
+                min_number_of_digits: 0,
+            }),
+        )?;
+
+        assert_eq!(
+            store.get::<String, String>("test1".to_string())?,
+            Some("test_value1".to_string())
+        );
+        delete_storage(&path, store)?;
+
         Ok(())
     }
 }
