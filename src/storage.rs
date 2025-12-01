@@ -879,7 +879,7 @@ mod tests {
             store.get::<String, String>("test1".to_string())?,
             Some("test_value1".to_string())
         );
-        delete_storage(&path, store)?;
+        Storage::delete_db_files(store)?;
 
         Ok(())
     }

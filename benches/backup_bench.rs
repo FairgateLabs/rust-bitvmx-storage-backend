@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rng, RngCore};
-use std::{env, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 use storage_backend::{
     error::StorageError,
     storage::Storage,
@@ -47,7 +47,7 @@ fn write_db(storage: &Storage, number_of_items: usize) {
 fn bench_create_storage(c: &mut Criterion) {
     let mut group = c.benchmark_group("backup");
     let number_of_items = 1_000_000;
-    let (path, _, storage) = create_path_and_storage().unwrap();
+    let (_, _, storage) = create_path_and_storage().unwrap();
 
     group.sample_size(10).bench_function(
         BenchmarkId::new("create_storage", number_of_items),
@@ -67,7 +67,7 @@ fn bench_create_backup(c: &mut Criterion) {
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
 
-    let (storage_path, _, storage) = create_path_and_storage().unwrap();
+    let (_, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
 
     group
@@ -88,11 +88,11 @@ fn bench_restore_backup(c: &mut Criterion) {
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
 
-    let (storage_path, _, storage) = create_path_and_storage().unwrap();
+    let (_, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
     storage.backup(backup_path.clone()).unwrap();
-    delete_storage(&storage_path, storage).unwrap();
-    let (path, _, store) = create_path_and_storage().unwrap();
+    Storage::delete_db_files(storage).unwrap();
+    let (_, _, store) = create_path_and_storage().unwrap();
 
     group.sample_size(10).bench_function(
         BenchmarkId::new("restore_backup", number_of_items),
