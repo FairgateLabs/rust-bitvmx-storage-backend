@@ -8,7 +8,7 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fs::{self, File},
-    io::{BufRead, BufReader, Cursor, Write},
+    io::{BufRead, BufReader, Cursor, Read, Write},
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
@@ -176,13 +176,23 @@ impl Storage {
         Ok(())
     }
 
-    pub fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P) -> Result<(), StorageError> {
-        let file = File::open(backup_path)?;
-        let mut file = BufReader::new(file);
+    pub fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P, dek_path: &P, password: String) -> Result<(), StorageError> {
+        let backup_file = File::open(backup_path)?;
+        let mut backup_file = BufReader::new(backup_file);
+        let mut dek_file = File::open(dek_path)?;
         let mut buf = Vec::new();
         let transaction_id = self.begin_transaction();
         let result: Result<(), StorageError> = {
-            while file.read_until(b';', &mut buf)? != 0 {
+            let mut encrypted_dek = Vec::new();
+            dek_file.read_to_end(&mut encrypted_dek)?;
+            let mut entry_cursor = Cursor::new(encrypted_dek);
+
+            let cocoon = Cocoon::new(password.as_bytes());
+            let dek = cocoon
+                .parse(&mut entry_cursor)
+                .map_err(|_| StorageError::WrongPassword)?;
+
+            while backup_file.read_until(b';', &mut buf)? != 0 {
                 buf.pop();
                 let mut parts = buf.splitn(2, |&b| b == b',');
                 if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
@@ -190,6 +200,16 @@ impl Storage {
                         .map_err(|_| StorageError::ConversionError)?;
                     let value = String::from_utf8(value.to_vec())
                         .map_err(|_| StorageError::ConversionError)?;
+                    let mut entry_cursor_key = Cursor::new(key);
+                    let mut entry_cursor_value = Cursor::new(value);
+                    let cocoon = Cocoon::new(&dek);
+                    let key = cocoon
+                        .parse(&mut entry_cursor_key)
+                        .map_err(|error| StorageError::FailedToDecryptData { error })?;
+                    let value = cocoon
+                        .parse(&mut entry_cursor_value)
+                        .map_err(|error| StorageError::FailedToDecryptData { error })?;
+
                     let key = hex::decode(key).map_err(|_| StorageError::ConversionError)?;
                     let value = hex::decode(value).map_err(|_| StorageError::ConversionError)?;
 
@@ -213,38 +233,71 @@ impl Storage {
         result
     }
 
-    pub fn backup<P: AsRef<Path>>(&self, backup_path: P) -> Result<(), StorageError> {
+    pub fn backup<P: AsRef<Path>>(&self, backup_path: P, dek_path: P, password: String) -> Result<(), StorageError> {
         let snapshot = self.db.snapshot();
         let mut iter = snapshot.iterator(rocksdb::IteratorMode::Start);
-        let mut file = File::create(backup_path)?;
-        let mut vec = Vec::new();
+        let mut backup_file = File::create(backup_path)?;
+        let mut dek_file = File::create(dek_path)?;
+        let mut data_vec = Vec::new();
         let mut item_counter = 0;
+
+        let mut dek = [0u8; 32];
+        OsRng.try_fill_bytes(&mut dek)?;
+
+        let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+        let mut cocoon = Cocoon::new(password.as_bytes());
+        cocoon
+            .dump(dek.to_vec(), &mut entry_cursor)
+            .map_err(|error| StorageError::FailedToEncryptData { error })?;
+        let encrypted_dek = entry_cursor.into_inner();
+        dek_file.write_all(&encrypted_dek)?;
+
         while let Some(Ok((k, v))) = iter.next() {
-            vec.push((k.to_vec(), v.to_vec()));
+            data_vec.push((k.to_vec(), v.to_vec()));
 
             if item_counter == 1000 {
                 let mut serialized_data = String::new();
-                for (key, value) in &vec {
+                for (key, value) in &data_vec {
                     let key = hex::encode(key);
                     let value = hex::encode(value);
-                    serialized_data.push_str(&format!("{},{};", key, value));
+                    let mut entry_cursor_key: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+                    let mut entry_cursor_value: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+                    let mut cocoon = Cocoon::new(&dek);
+                    cocoon
+                        .dump(key.into_bytes(), &mut entry_cursor_key)
+                        .map_err(|error| StorageError::FailedToEncryptData { error })?;
+                    cocoon
+                        .dump(value.into_bytes(), &mut entry_cursor_value)
+                        .map_err(|error| StorageError::FailedToEncryptData { error })?;
+
+                    serialized_data.push_str(&format!("{:?},{:?};", entry_cursor_key.into_inner(), entry_cursor_value.into_inner()));
                 }
-                file.write_all(serialized_data.as_bytes())?;
+                backup_file.write_all(serialized_data.as_bytes())?;
                 item_counter = 0;
-                vec.clear();
+                data_vec.clear();
             } else {
                 item_counter += 1;
             }
         }
 
-        if !vec.is_empty() {
+        if !data_vec.is_empty() {
             let mut serialized_data = String::new();
-            for (key, value) in &vec {
+            for (key, value) in &data_vec {
                 let key = hex::encode(key);
                 let value = hex::encode(value);
-                serialized_data.push_str(&format!("{},{};", key, value));
+                let mut entry_cursor_key: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+                let mut entry_cursor_value: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+                let mut cocoon = Cocoon::new(&dek);
+                cocoon
+                    .dump(key.into_bytes(), &mut entry_cursor_key)
+                    .map_err(|error| StorageError::FailedToEncryptData { error })?;
+                cocoon
+                    .dump(value.into_bytes(), &mut entry_cursor_value)
+                    .map_err(|error| StorageError::FailedToEncryptData { error })?;
+
+                serialized_data.push_str(&format!("{:?},{:?};", entry_cursor_key.into_inner(), entry_cursor_value.into_inner()));
             }
-            file.write_all(serialized_data.as_bytes())?;
+            backup_file.write_all(serialized_data.as_bytes())?;
         }
 
         Ok(())
@@ -795,34 +848,41 @@ mod tests {
     #[test]
     fn test_backup() -> Result<(), StorageError> {
         let backup_path = temp_storage();
+        let dek_path = temp_storage();
+        let password = "password".to_string();
         let (_, _, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
-        store.backup(backup_path.clone())?;
+        store.backup(&backup_path, &dek_path, password)?;
         assert!(backup_path.exists());
+        assert!(dek_path.exists());
 
         Storage::delete_db_files(store)?;
         fs::remove_file(backup_path)?;
+        fs::remove_file(dek_path)?;
         Ok(())
     }
 
     #[test]
     fn test_restore_backup() -> Result<(), StorageError> {
         let backup_path = temp_storage();
+        let dek_path = temp_storage();
+        let password = "password".to_string();
         let (_, config, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
-        store.backup(backup_path.clone())?;
+        store.backup(&backup_path, &dek_path, password.clone())?;
 
         Storage::delete_db_files(store)?;
         let store = Storage::new(&config)?;
-        store.restore_backup(&backup_path)?;
+        store.restore_backup(&backup_path, &dek_path, password)?;
 
         assert_eq!(store.read("test1")?, Some("test_value1".to_string()));
         assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
 
         Storage::delete_db_files(store)?;
         fs::remove_file(backup_path)?;
+        fs::remove_file(dek_path)?;
         Ok(())
     }
 
@@ -830,17 +890,19 @@ mod tests {
     fn test_more_than_1000_values_to_backup() -> Result<(), StorageError> {
         let quantity = 1500;
         let backup_path = temp_storage();
+        let dek_path = temp_storage();
+        let password = "password".to_string();
         let (_, config, store) = create_path_and_storage(false)?;
         for i in 0..quantity {
             store.write(&format!("test{}", i), &format!("test_value{}", i))?;
         }
-        store.backup(backup_path.clone())?;
+        store.backup(&backup_path, &dek_path, password.clone())?;
         assert!(backup_path.exists());
 
         Storage::delete_db_files(store)?;
 
         let store = Storage::new(&config)?;
-        store.restore_backup(&backup_path.clone())?;
+        store.restore_backup(&backup_path, &dek_path, password)?;
 
         for i in 0..quantity {
             assert_eq!(
@@ -851,6 +913,7 @@ mod tests {
 
         Storage::delete_db_files(store)?;
         fs::remove_file(backup_path)?;
+        fs::remove_file(dek_path)?;
         Ok(())
     }
 

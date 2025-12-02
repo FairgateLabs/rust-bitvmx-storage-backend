@@ -25,9 +25,13 @@ struct StorageSettings {
 }
 
 #[derive(Parser, Debug, Clone)]
-struct BackupPath {
+struct BackupSettings {
     #[clap(short, long, default_value = "backup")]
     backup_path: PathBuf,
+    #[clap(short, long, default_value = "dek")]
+    dek_path: PathBuf,
+    #[clap(short, long, default_value = "password")]
+    password: String,
     #[clap(flatten)]
     storage_settings: StorageSettings,
 }
@@ -59,8 +63,8 @@ enum Action {
     PartialCompare(StorageAndKey),
     Contains(StorageAndKey),
     ListKeys(StorageSettings),
-    Backup(BackupPath),
-    RestoreBackup(BackupPath),
+    Backup(BackupSettings),
+    RestoreBackup(BackupSettings),
     ChangePassword {
         #[clap(flatten)]
         storage_settings: StorageSettings,
@@ -250,17 +254,17 @@ pub fn run(args: Cli) -> Result<(), String> {
                 println!("{}", key);
             }
         }
-        Action::Backup(backup) => {
+        Action::Backup(backup_settings) => {
             storage
-                .backup(&backup.backup_path)
+                .backup(&backup_settings.backup_path, &backup_settings.dek_path, backup_settings.password)
                 .map_err(|e| e.to_string())?;
-            println!("Backup created at {:?}", backup.backup_path);
+            println!("Backup created at {:?}", backup_settings.backup_path);
         }
-        Action::RestoreBackup(backup) => {
+        Action::RestoreBackup(backup_settings) => {
             storage
-                .restore_backup(&backup.backup_path)
+                .restore_backup(&backup_settings.backup_path, &backup_settings.dek_path, backup_settings.password)
                 .map_err(|e| e.to_string())?;
-            println!("Backup restored from {:?}", backup.backup_path);
+            println!("Backup restored from {:?}", backup_settings.backup_path);
         }
         Action::ChangePassword {
             storage_settings,
