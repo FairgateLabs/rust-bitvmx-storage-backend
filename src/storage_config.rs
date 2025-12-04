@@ -1,3 +1,4 @@
+use bitvmx_settings::secret::Secret;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -11,17 +12,20 @@ pub struct PasswordPolicyConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct StorageConfig {
     pub path: String,
-    pub password: Option<String>,
+    pub password: Option<Secret>,
 }
 
 impl StorageConfig {
-    pub fn new(
-        path: String,
-        password: Option<String>,
-    ) -> Self {
+    pub fn new(path: String, password: Option<String>) -> Self {
+        let secret: Option<Secret> = if let Some(password) = password {
+            Some(Secret::from(password))
+        } else {
+            None
+        };
+
         Self {
             path,
-            password,
+            password: secret,
         }
     }
 }

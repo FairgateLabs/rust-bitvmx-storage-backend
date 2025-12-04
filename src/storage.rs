@@ -1,4 +1,8 @@
-use crate::{error::StorageError, password_policy::PasswordPolicy, storage_config::{PasswordPolicyConfig, StorageConfig}};
+use crate::{
+    error::StorageError,
+    password_policy::PasswordPolicy,
+    storage_config::{PasswordPolicyConfig, StorageConfig},
+};
 use cocoon::Cocoon;
 use rand::{rngs::OsRng, TryRngCore};
 use rocksdb::TransactionDB;
@@ -399,7 +403,7 @@ impl Storage {
             .map_err(|_| StorageError::ReadError)?;
         Ok(result.is_some())
     }
-    
+
     /// # Safety
     /// This method uses `std::mem::transmute` to extend the transaction's lifetime to `'static`,
     /// which is safe in this context because all transactions are stored in a `RefCell` within the `Storage` struct,
@@ -412,7 +416,10 @@ impl Storage {
         map.insert(
             id,
             Box::new(unsafe {
-                std::mem::transmute::<rocksdb::Transaction<'_, TransactionDB>, rocksdb::Transaction<'static, TransactionDB>>(transaction)
+                std::mem::transmute::<
+                    rocksdb::Transaction<'_, TransactionDB>,
+                    rocksdb::Transaction<'static, TransactionDB>,
+                >(transaction)
             }),
         );
         id
@@ -537,6 +544,7 @@ fn create_options() -> rocksdb::Options {
 mod tests {
     use super::*;
     use crate::storage_config::PasswordPolicyConfig;
+    use bitvmx_settings::secret::Secret;
     use rand::{rng, RngCore};
     use std::env;
 
@@ -560,10 +568,10 @@ mod tests {
 
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            password,
+            password: password.map(|p| Secret::from(p)),
         };
-        
-        let storage = if is_encrypted{
+
+        let storage = if is_encrypted {
             Storage::new_with_policy(
                 &config,
                 Some(PasswordPolicyConfig {
@@ -672,7 +680,7 @@ mod tests {
 
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            password: Some("password".to_string()),
+            password: Some(Secret::from("password")),
         };
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());
@@ -856,16 +864,17 @@ mod tests {
 
     #[test]
     fn test_change_password() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(true,)?;
+        let (path, _, store) = create_path_and_storage(true)?;
         store.set("test1", "test_value1", None)?;
 
         store.change_password("password".to_string(), "new_password".to_string())?;
 
         drop(store);
 
-        let store = Storage::new_with_policy(&StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            password: Some("new_password".to_string()),
+        let store = Storage::new_with_policy(
+            &StorageConfig {
+                path: path.to_string_lossy().to_string(),
+                password: Some(Secret::from("new_password")),
             },
             Some(PasswordPolicyConfig {
                 min_length: 1,
