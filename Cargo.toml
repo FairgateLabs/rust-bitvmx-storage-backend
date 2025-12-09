@@ -22,6 +22,7 @@ uuid = { version = "1.10.0", features = ["v4"] }
 cocoon = "0.4.2"
 hex = "0.4.3"
 rand = "0.9.1"
+age = "0.11.2"
 [dev-dependencies]
 criterion = "0.6.0"
 
