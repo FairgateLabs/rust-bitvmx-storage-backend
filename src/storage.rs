@@ -96,14 +96,14 @@ impl Storage {
                 PasswordPolicy::default()
             };
 
-            if !password_policy.is_valid(password) {
+            if !password_policy.is_valid(password.expose_secret()) {
                 return Err(StorageError::WeakPassword(password_policy));
             }
             let dek = match db.get(DEK_KEY).map_err(|_| StorageError::ReadError)? {
                 Some(encrypted_dek) => {
                     let mut entry_cursor = Cursor::new(encrypted_dek);
 
-                    let cocoon = Cocoon::new(password.as_bytes());
+                    let cocoon = Cocoon::new(password.expose_secret().as_bytes());
                     let dek = cocoon
                         .parse(&mut entry_cursor)
                         .map_err(|_| StorageError::WrongPassword)?;
@@ -115,7 +115,7 @@ impl Storage {
                     OsRng.try_fill_bytes(&mut bytes)?;
 
                     let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-                    let mut cocoon = Cocoon::new(password.as_bytes());
+                    let mut cocoon = Cocoon::new(password.expose_secret().as_bytes());
                     cocoon
                         .dump(bytes.to_vec(), &mut entry_cursor)
                         .map_err(|error| StorageError::FailedToEncryptData { error })?;
@@ -544,8 +544,8 @@ fn create_options() -> rocksdb::Options {
 mod tests {
     use super::*;
     use crate::storage_config::PasswordPolicyConfig;
-    use bitvmx_settings::secret::Secret;
     use rand::{rng, RngCore};
+    use redact::Secret;
     use std::env;
 
     fn temp_storage() -> PathBuf {
