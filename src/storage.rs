@@ -177,6 +177,35 @@ impl Storage {
         Ok(())
     }
 
+    pub fn change_backup_password<P: AsRef<Path>>(&self, dek_path: &P, old_password: String, new_password: String) -> Result<(), StorageError> {
+        if !self.password_policy.is_valid(&new_password) {
+            return Err(StorageError::WeakPassword(self.password_policy.clone()));
+        }
+
+        let mut dek_file = File::open(dek_path)?;
+        let mut buf = Vec::new();
+        dek_file.read_to_end(&mut buf)?;
+
+        let mut entry_cursor = Cursor::new(buf);
+
+        let cocoon = Cocoon::new(old_password.as_bytes());
+        let dek = cocoon
+            .parse(&mut entry_cursor)
+            .map_err(|_| StorageError::WrongPassword)?;
+
+        let mut new_entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+        let mut new_cocoon = Cocoon::new(new_password.as_bytes());
+        new_cocoon
+            .dump(dek, &mut new_entry_cursor)
+            .map_err(|error| StorageError::FailedToEncryptData { error })?;
+        let encrypted_dek = new_entry_cursor.into_inner();
+
+        let mut dek_file = File::create(dek_path)?;
+        dek_file.write_all(&encrypted_dek)?;
+
+        Ok(())
+    }
+
     pub fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P, dek_path: &P, password: String) -> Result<(), StorageError> {
         let backup_file = File::open(backup_path)?;
         let backup_file = BufReader::new(backup_file);
@@ -604,19 +633,15 @@ mod tests {
             password,
         };
         
-        let storage = if is_encrypted{
-            Storage::new_with_policy(
-                &config,
-                Some(PasswordPolicyConfig {
-                    min_length: 1,
-                    min_number_of_special_chars: 0,
-                    min_number_of_uppercase: 0,
-                    min_number_of_digits: 0,
-                }),
-            )?
-        } else {
-            Storage::new(&config)?
-        };
+        let storage = Storage::new_with_policy(
+            &config,
+            Some(PasswordPolicyConfig {
+                min_length: 1,
+                min_number_of_special_chars: 0,
+                min_number_of_uppercase: 0,
+                min_number_of_digits: 0,
+            }),
+        )?;
 
         Ok((path.clone(), config, storage))
     }
@@ -901,7 +926,7 @@ mod tests {
 
     #[test]
     fn test_change_password() -> Result<(), StorageError> {
-        let (path, _, store) = create_path_and_storage(true,)?;
+        let (path, _, store) = create_path_and_storage(true)?;
         store.set("test1", "test_value1", None)?;
 
         store.change_password("password".to_string(), "new_password".to_string())?;
@@ -926,6 +951,52 @@ mod tests {
         );
         Storage::delete_db_files(store)?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_change_backup_password() -> Result<(), StorageError> {
+        let (backup_path, dek_path) = temp_backup();
+        let password = "password".to_string();
+        let new_password = "new_password".to_string();
+        let path = &temp_storage();
+        
+        let store = Storage::new_with_policy(&StorageConfig {
+            path: path.to_string_lossy().to_string(),
+            password: None
+            },
+            Some(PasswordPolicyConfig {
+                min_length: 1,
+                min_number_of_special_chars: 0,
+                min_number_of_uppercase: 0,
+                min_number_of_digits: 0,
+            }),
+        )?;
+
+        store.write("test1", "test_value1")?;
+        store.backup(&backup_path, &dek_path, password.clone())?;
+        store.change_backup_password(&dek_path, password.clone(), new_password.clone())?;
+        Storage::delete_db_files(store)?;
+
+        let store = Storage::new_with_policy(&StorageConfig {
+            path: path.to_string_lossy().to_string(),
+            password: None
+            },
+            Some(PasswordPolicyConfig {
+                min_length: 1,
+                min_number_of_special_chars: 0,
+                min_number_of_uppercase: 0,
+                min_number_of_digits: 0,
+            }),
+        )?;
+
+        store.restore_backup(&backup_path, &dek_path, new_password)?;
+
+        assert_eq!(store.read("test1")?, Some("test_value1".to_string()));
+        
+        Storage::delete_db_files(store)?;
+        fs::remove_file(backup_path)?;
+        fs::remove_file(dek_path)?;
         Ok(())
     }
 }

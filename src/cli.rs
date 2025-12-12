@@ -71,6 +71,12 @@ enum Action {
         #[clap(short, long)]
         new_password: String,
     },
+    ChangeBackupPassword{
+        #[clap(flatten)]
+        backup_settings: BackupSettings,
+        #[clap(short, long)]
+        new_password: String,
+    },
     Dump {
         #[clap(flatten)]
         storage_settings: StorageSettings,
@@ -96,6 +102,8 @@ impl Action {
             Action::ChangePassword {
                 storage_settings, ..
             } => &storage_settings.storage_path,
+            Action::ChangeBackupPassword { backup_settings, .. 
+            } => &backup_settings.storage_settings.storage_path,
             Action::Dump {
                 storage_settings, ..
             } => &storage_settings.storage_path,
@@ -116,6 +124,8 @@ impl Action {
             Action::ChangePassword {
                 storage_settings, ..
             } => storage_settings.password.clone(),
+            Action::ChangeBackupPassword { backup_settings, .. 
+            } => backup_settings.storage_settings.password.clone(),
             Action::Dump {
                 storage_settings, ..
             } => storage_settings.password.clone(),
@@ -283,6 +293,20 @@ pub fn run(args: Cli) -> Result<(), String> {
             println!(
                 "Password changed for storage at {:?}",
                 storage_settings.storage_path
+            );
+        }
+        Action::ChangeBackupPassword {
+            backup_settings,
+            new_password,
+        } => {
+            let old_password = backup_settings.password;
+
+            storage
+                .change_backup_password(&backup_settings.dek_path, old_password, new_password)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "Backup password changed for storage at {:?}",
+                backup_settings.storage_settings.storage_path
             );
         }
         Action::Dump {
