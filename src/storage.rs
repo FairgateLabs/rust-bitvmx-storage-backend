@@ -20,7 +20,7 @@ pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
     password: Option<Vec<u8>>,
-    password_policy: Option<PasswordPolicy>,
+    password_policy: PasswordPolicy,
 }
 
 pub trait KeyValueStore {
@@ -85,12 +85,13 @@ impl Storage {
             config.path.as_str(),
         )?;
 
-        let (dek, password_policy) = if let Some(ref password) = config.password {
-            let password_policy = if let Some(ref policy) = password_policy_config {
+        let password_policy = if let Some(ref policy) = password_policy_config {
                 PasswordPolicy::new(policy.clone())
             } else {
                 PasswordPolicy::default()
             };
+
+        let dek = if let Some(ref password) = config.password {
 
             if !password_policy.is_valid(password) {
                 return Err(StorageError::WeakPassword(password_policy));
@@ -122,9 +123,9 @@ impl Storage {
                 }
             };
 
-            (Some(dek), Some(password_policy))
+            Some(dek)
         } else {
-            (None, None)
+            None
         };
 
         Ok(Storage {
@@ -140,10 +141,10 @@ impl Storage {
         old_password: String,
         new_password: String,
     ) -> Result<(), StorageError> {
-        match &self.password_policy {
-            Some(policy) => {
-                if !policy.is_valid(&new_password) {
-                    return Err(StorageError::WeakPassword(policy.clone()));
+        match &self.password {
+            Some(_) => {
+                if !self.password_policy.is_valid(&new_password) {
+                    return Err(StorageError::WeakPassword(self.password_policy.clone()));
                 }
             }
             None => return Err(StorageError::NoPasswordSet),
@@ -226,6 +227,10 @@ impl Storage {
     }
 
     pub fn backup<P: AsRef<Path>>(&self, backup_path: P, dek_path: P, password: String) -> Result<(), StorageError> {
+        if !self.password_policy.is_valid(&password) {
+            return Err(StorageError::WeakPassword(self.password_policy.clone()));
+        }
+
         let snapshot = self.db.snapshot();
         let mut iter = snapshot.iterator(rocksdb::IteratorMode::Start);
         let backup_file = File::create(backup_path)?;
