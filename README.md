@@ -9,6 +9,9 @@ It is not production-ready, has not been audited, and future updates may introdu
 ## ⚠️ Usage Warning
 This library is not thread-safe and is limited to single threaded access due to the use of RefCell for transaction management.
 
+## Backup Usage Disclaimer
+The internal storage password and the backup password are two separate passwords, although they may be the same one. Hovewer, if you want to restore a backup you need to remember the password you used for this backup. Also, when you generate a backup, it creates two files, the dek file and the backup file. The dek file is where the random generated dek key to encrypt the bakcup file is stored, encrypted by the password you provided.
+
 ## Installation
 
 For detailed installation instructions, environment setup, and troubleshooting, please see the [Installation Guide](INSTALLATION.md).
