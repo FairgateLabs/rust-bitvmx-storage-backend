@@ -16,16 +16,7 @@ pub struct StorageConfig {
 }
 
 impl StorageConfig {
-    pub fn new(path: String, password: Option<String>) -> Self {
-        let secret: Option<Secret<String>> = if let Some(password) = password {
-            Some(Secret::from(password))
-        } else {
-            None
-        };
-
-        Self {
-            path,
-            password: secret,
-        }
+    pub fn new(path: String, password: Option<Secret<String>>) -> Self {
+        Self { path, password }
     }
 }
