@@ -111,64 +111,26 @@ impl Action {
         }
     }
 
-    fn get_encryption_password(&self) -> Option<String> {
+    fn get_encryption_password(&self) -> Option<Secret<String>> {
         match self {
-            Action::New(args) => args.password.as_ref().map(|p| p.expose_secret().clone()),
-            Action::Write(args) => args
-                .storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
-            Action::Read(args) => args
-                .storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
-            Action::Delete(args) => args
-                .storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
-            Action::PartialCompare(args) => args
-                .storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
-            Action::Contains(args) => args
-                .storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
-            Action::ListKeys(args) => args.password.as_ref().map(|p| p.expose_secret().clone()),
-            Action::Backup(args) => args
-                .storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
-            Action::RestoreBackup(args) => args
-                .storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
+            Action::New(args) => args.password.clone(),
+            Action::Write(args) => args.storage_settings.password.clone(),
+            Action::Read(args) => args.storage_settings.password.clone(),
+            Action::Delete(args) => args.storage_settings.password.clone(),
+            Action::PartialCompare(args) => args.storage_settings.password.clone(),
+            Action::Contains(args) => args.storage_settings.password.clone(),
+            Action::ListKeys(args) => args.password.clone(),
+            Action::Backup(args) => args.storage_settings.password.clone(),
+            Action::RestoreBackup(args) => args.storage_settings.password.clone(),
             Action::ChangePassword {
                 storage_settings, ..
-            } => storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
+            } => storage_settings.password.clone(),
             Action::ChangeBackupPassword {
                 backup_settings, ..
-            } => backup_settings
-                .storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
+            } => backup_settings.storage_settings.password.clone(),
             Action::Dump {
                 storage_settings, ..
-            } => storage_settings
-                .password
-                .as_ref()
-                .map(|p| p.expose_secret().clone()),
+            } => storage_settings.password.clone(),
         }
     }
 
@@ -230,9 +192,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         _ => {
             let config = StorageConfig::new(
                 args.action.get_storage_path().to_string_lossy().to_string(),
-                args.action
-                    .get_encryption_password()
-                    .map(|p| Secret::from(p)),
+                args.action.get_encryption_password(),
             );
             if let Some(password_policy) = args.action.get_password_policy_config() {
                 Storage::open_with_policy(&config, Some(password_policy))
