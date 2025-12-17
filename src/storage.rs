@@ -1,6 +1,12 @@
-use crate::{backup_io::{BackupFileReader, BackupFileWriter}, error::StorageError, password_policy::PasswordPolicy, storage_config::{PasswordPolicyConfig, StorageConfig}};
+use crate::{
+    backup_io::{BackupFileReader, BackupFileWriter},
+    error::StorageError,
+    password_policy::PasswordPolicy,
+    storage_config::{PasswordPolicyConfig, StorageConfig},
+};
 use cocoon::Cocoon;
 use rand::{rngs::OsRng, TryRngCore};
+use redact::Secret;
 use rocksdb::TransactionDB;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -86,21 +92,20 @@ impl Storage {
         )?;
 
         let password_policy = if let Some(ref policy) = password_policy_config {
-                PasswordPolicy::new(policy.clone())
-            } else {
-                PasswordPolicy::default()
-            };
+            PasswordPolicy::new(policy.clone())
+        } else {
+            PasswordPolicy::default()
+        };
 
         let dek = if let Some(ref password) = config.password {
-
-            if !password_policy.is_valid(password) {
+            if !password_policy.is_valid(password.expose_secret()) {
                 return Err(StorageError::WeakPassword(password_policy));
             }
             let dek = match db.get(DEK_KEY).map_err(|_| StorageError::ReadError)? {
                 Some(encrypted_dek) => {
                     let mut entry_cursor = Cursor::new(encrypted_dek);
 
-                    let cocoon = Cocoon::new(password.as_bytes());
+                    let cocoon = Cocoon::new(password.expose_secret().as_bytes());
                     let dek = cocoon
                         .parse(&mut entry_cursor)
                         .map_err(|_| StorageError::WrongPassword)?;
@@ -112,7 +117,7 @@ impl Storage {
                     OsRng.try_fill_bytes(&mut bytes)?;
 
                     let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-                    let mut cocoon = Cocoon::new(password.as_bytes());
+                    let mut cocoon = Cocoon::new(password.expose_secret().as_bytes());
                     cocoon
                         .dump(bytes.to_vec(), &mut entry_cursor)
                         .map_err(|error| StorageError::FailedToEncryptData { error })?;
@@ -138,12 +143,12 @@ impl Storage {
 
     pub fn change_password(
         &self,
-        old_password: String,
-        new_password: String,
+        old_password: Secret<String>,
+        new_password: Secret<String>,
     ) -> Result<(), StorageError> {
         match &self.password {
             Some(_) => {
-                if !self.password_policy.is_valid(&new_password) {
+                if !self.password_policy.is_valid(&new_password.expose_secret()) {
                     return Err(StorageError::WeakPassword(self.password_policy.clone()));
                 }
             }
@@ -154,7 +159,7 @@ impl Storage {
             Some(encrypted_dek) => {
                 let mut entry_cursor = Cursor::new(encrypted_dek);
 
-                let cocoon = Cocoon::new(old_password.as_bytes());
+                let cocoon = Cocoon::new(old_password.expose_secret().as_bytes());
                 let dek = cocoon
                     .parse(&mut entry_cursor)
                     .map_err(|_| StorageError::WrongPassword)?;
@@ -165,7 +170,7 @@ impl Storage {
         };
 
         let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut cocoon = Cocoon::new(new_password.as_bytes());
+        let mut cocoon = Cocoon::new(new_password.expose_secret().as_bytes());
         cocoon
             .dump(dek, &mut entry_cursor)
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
@@ -177,8 +182,13 @@ impl Storage {
         Ok(())
     }
 
-    pub fn change_backup_password<P: AsRef<Path>>(&self, dek_path: &P, old_password: String, new_password: String) -> Result<(), StorageError> {
-        if !self.password_policy.is_valid(&new_password) {
+    pub fn change_backup_password<P: AsRef<Path>>(
+        &self,
+        dek_path: &P,
+        old_password: Secret<String>,
+        new_password: Secret<String>,
+    ) -> Result<(), StorageError> {
+        if !self.password_policy.is_valid(&new_password.expose_secret()) {
             return Err(StorageError::WeakPassword(self.password_policy.clone()));
         }
 
@@ -188,13 +198,13 @@ impl Storage {
 
         let mut entry_cursor = Cursor::new(buf);
 
-        let cocoon = Cocoon::new(old_password.as_bytes());
+        let cocoon = Cocoon::new(old_password.expose_secret().as_bytes());
         let dek = cocoon
             .parse(&mut entry_cursor)
             .map_err(|_| StorageError::WrongPassword)?;
 
         let mut new_entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut new_cocoon = Cocoon::new(new_password.as_bytes());
+        let mut new_cocoon = Cocoon::new(new_password.expose_secret().as_bytes());
         new_cocoon
             .dump(dek, &mut new_entry_cursor)
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
@@ -206,7 +216,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn restore_backup<P: AsRef<Path>>(&self, backup_path: &P, dek_path: &P, password: String) -> Result<(), StorageError> {
+    pub fn restore_backup<P: AsRef<Path>>(
+        &self,
+        backup_path: &P,
+        dek_path: &P,
+        password: Secret<String>,
+    ) -> Result<(), StorageError> {
         let backup_file = File::open(backup_path)?;
         let backup_file = BufReader::new(backup_file);
         let mut dek_file = File::open(dek_path)?;
@@ -217,7 +232,7 @@ impl Storage {
             dek_file.read_to_end(&mut encrypted_dek)?;
             let mut entry_cursor = Cursor::new(encrypted_dek);
 
-            let cocoon = Cocoon::new(password.as_bytes());
+            let cocoon = Cocoon::new(password.expose_secret().as_bytes());
             let dek = cocoon
                 .parse(&mut entry_cursor)
                 .map_err(|_| StorageError::WrongPassword)?;
@@ -255,8 +270,13 @@ impl Storage {
         result
     }
 
-    pub fn backup<P: AsRef<Path>>(&self, backup_path: P, dek_path: P, password: String) -> Result<(), StorageError> {
-        if !self.password_policy.is_valid(&password) {
+    pub fn backup<P: AsRef<Path>>(
+        &self,
+        backup_path: P,
+        dek_path: P,
+        password: Secret<String>,
+    ) -> Result<(), StorageError> {
+        if !self.password_policy.is_valid(&password.expose_secret()) {
             return Err(StorageError::WeakPassword(self.password_policy.clone()));
         }
 
@@ -271,7 +291,7 @@ impl Storage {
         OsRng.try_fill_bytes(&mut dek)?;
 
         let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut cocoon = Cocoon::new(password.as_bytes());
+        let mut cocoon = Cocoon::new(password.expose_secret().as_bytes());
         cocoon
             .dump(dek.to_vec(), &mut entry_cursor)
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
@@ -462,7 +482,7 @@ impl Storage {
             .map_err(|_| StorageError::ReadError)?;
         Ok(result.is_some())
     }
-    
+
     /// # Safety
     /// This method uses `std::mem::transmute` to extend the transaction's lifetime to `'static`,
     /// which is safe in this context because all transactions are stored in a `RefCell` within the `Storage` struct,
@@ -475,7 +495,10 @@ impl Storage {
         map.insert(
             id,
             Box::new(unsafe {
-                std::mem::transmute::<rocksdb::Transaction<'_, TransactionDB>, rocksdb::Transaction<'static, TransactionDB>>(transaction)
+                std::mem::transmute::<
+                    rocksdb::Transaction<'_, TransactionDB>,
+                    rocksdb::Transaction<'static, TransactionDB>,
+                >(transaction)
             }),
         );
         id
@@ -601,6 +624,7 @@ mod tests {
     use super::*;
     use crate::storage_config::PasswordPolicyConfig;
     use rand::{rng, RngCore};
+    use redact::Secret;
     use std::env;
 
     fn temp_storage() -> PathBuf {
@@ -614,7 +638,10 @@ mod tests {
         let dir = env::temp_dir();
         let mut rang = rng();
         let index = rang.next_u32();
-        (dir.join(format!("backup_{}", index)), dir.join(format!("dek_{}", index)))
+        (
+            dir.join(format!("backup_{}", index)),
+            dir.join(format!("dek_{}", index)),
+        )
     }
 
     fn create_path_and_storage(
@@ -630,9 +657,9 @@ mod tests {
 
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            password,
+            password: password.map(|p| Secret::from(p)),
         };
-        
+
         let storage = Storage::new_with_policy(
             &config,
             Some(PasswordPolicyConfig {
@@ -738,7 +765,7 @@ mod tests {
 
         let config = StorageConfig {
             path: path.to_string_lossy().to_string(),
-            password: Some("password".to_string()),
+            password: Some(Secret::from("password")),
         };
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());
@@ -861,7 +888,7 @@ mod tests {
     #[test]
     fn test_backup() -> Result<(), StorageError> {
         let (backup_path, dek_path) = temp_backup();
-        let password = "password".to_string();
+        let password = Secret::from("password");
         let (_, _, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
@@ -875,7 +902,7 @@ mod tests {
     #[test]
     fn test_restore_backup() -> Result<(), StorageError> {
         let (backup_path, dek_path) = temp_backup();
-        let password = "password".to_string();
+        let password = Secret::from("password");
         let (_, config, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1")?;
         store.write("test2", "test_value2")?;
@@ -898,7 +925,7 @@ mod tests {
     fn test_more_than_1000_values_to_backup() -> Result<(), StorageError> {
         let quantity = 1500;
         let (backup_path, dek_path) = temp_backup();
-        let password = "password".to_string();
+        let password = Secret::from("password");
         let (_, config, store) = create_path_and_storage(false)?;
         for i in 0..quantity {
             store.write(&format!("test{}", i), &format!("test_value{}", i))?;
@@ -929,13 +956,14 @@ mod tests {
         let (path, _, store) = create_path_and_storage(true)?;
         store.set("test1", "test_value1", None)?;
 
-        store.change_password("password".to_string(), "new_password".to_string())?;
+        store.change_password(Secret::from("password"), Secret::from("new_password"))?;
 
         drop(store);
 
-        let store = Storage::new_with_policy(&StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            password: Some("new_password".to_string()),
+        let store = Storage::new_with_policy(
+            &StorageConfig {
+                path: path.to_string_lossy().to_string(),
+                password: Some(Secret::from("new_password")),
             },
             Some(PasswordPolicyConfig {
                 min_length: 1,
@@ -957,13 +985,14 @@ mod tests {
     #[test]
     fn test_change_backup_password() -> Result<(), StorageError> {
         let (backup_path, dek_path) = temp_backup();
-        let password = "password".to_string();
-        let new_password = "new_password".to_string();
+        let password = Secret::from("password");
+        let new_password = Secret::from("new_password");
         let path = &temp_storage();
-        
-        let store = Storage::new_with_policy(&StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            password: None
+
+        let store = Storage::new_with_policy(
+            &StorageConfig {
+                path: path.to_string_lossy().to_string(),
+                password: None,
             },
             Some(PasswordPolicyConfig {
                 min_length: 1,
@@ -978,9 +1007,10 @@ mod tests {
         store.change_backup_password(&dek_path, password.clone(), new_password.clone())?;
         Storage::delete_db_files(store)?;
 
-        let store = Storage::new_with_policy(&StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            password: None
+        let store = Storage::new_with_policy(
+            &StorageConfig {
+                path: path.to_string_lossy().to_string(),
+                password: None,
             },
             Some(PasswordPolicyConfig {
                 min_length: 1,
@@ -993,7 +1023,7 @@ mod tests {
         store.restore_backup(&backup_path, &dek_path, new_password)?;
 
         assert_eq!(store.read("test1")?, Some("test_value1".to_string()));
-        
+
         Storage::delete_db_files(store)?;
         fs::remove_file(backup_path)?;
         fs::remove_file(dek_path)?;
