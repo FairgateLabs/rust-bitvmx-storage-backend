@@ -1,6 +1,6 @@
 [package]
 name = "rust-bitvmx-storage-backend"
-version = "0.1.1"
+version = "0.5.0"
 edition = "2021"
 description = "Rust BitVMX Storage Backend"
 license = "MIT"
