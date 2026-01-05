@@ -14,6 +14,7 @@ use std::{
 use uuid::Uuid;
 
 const DEK_KEY: &str = "DEK";
+const GLOBAL_TRANSACTION_ID: Uuid = Uuid::nil();
 
 /// Storage is limited to single threaded access due to the use of RefCell for transaction management.
 pub struct Storage {
@@ -33,6 +34,10 @@ pub trait KeyValueStore {
     where
         K: AsRef<str>,
         V: Serialize;
+
+    fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
+    where
+        K: AsRef<str>;
 
     fn update<K, V>(
         &self,
@@ -406,15 +411,8 @@ impl Storage {
     /// and are only accessed from the same thread.
     /// Ensure that all transactions are properly committed or rolled back to avoid resource leaks.
     pub fn begin_transaction(&self) -> Uuid {
-        let transaction = self.db.transaction();
-        let mut map = self.transactions.borrow_mut();
         let id = Uuid::new_v4();
-        map.insert(
-            id,
-            Box::new(unsafe {
-                std::mem::transmute::<rocksdb::Transaction<'_, TransactionDB>, rocksdb::Transaction<'static, TransactionDB>>(transaction)
-            }),
-        );
+        self.create_transaction(id);
         id
     }
 
@@ -433,6 +431,33 @@ impl Storage {
         map.remove(&transaction_id)
             .ok_or(StorageError::NotFound("Transaction".to_string()))?;
         Ok(())
+    }
+
+    pub fn begin_global_transaction(&self) {
+        self.create_transaction(GLOBAL_TRANSACTION_ID);
+    }
+    
+    pub fn commit_global_transaction(&self) -> Result<(), StorageError> {
+        self.commit_transaction(GLOBAL_TRANSACTION_ID)
+    }
+
+    pub fn rollback_global_transaction(&self) -> Result<(), StorageError> {
+        self.rollback_transaction(GLOBAL_TRANSACTION_ID)
+    }
+
+    fn create_transaction(&self, transaction_id: Uuid) {
+        let transaction = self.db.transaction();
+        let mut map = self.transactions.borrow_mut();
+        map.insert(
+            transaction_id,
+            Box::new(unsafe {
+                std::mem::transmute::<rocksdb::Transaction<'_, TransactionDB>, rocksdb::Transaction<'static, TransactionDB>>(transaction)
+            }),
+        );
+    }
+
+    fn global_transaction_is_active(&self) -> bool {
+        self.transactions.borrow().contains_key(&GLOBAL_TRANSACTION_ID)
     }
 
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
@@ -482,8 +507,32 @@ impl KeyValueStore for Storage {
         let value = serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
 
         match transaction_id {
-            Some(id) => Ok(self.transactional_write(key, &value, id)?),
-            None => Ok(self.write(key, &value)?),
+            Some(id) => self.transactional_write(key, &value, id),
+            None => {
+                if self.global_transaction_is_active(){
+                    return self.transactional_write(key, &value, GLOBAL_TRANSACTION_ID);
+                } else {
+                    return self.write(key, &value);
+                }
+            }
+        }
+    }
+
+    fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
+        where
+            K: AsRef<str> 
+    {
+        let key = key.as_ref();
+        
+        match transaction_id {
+            Some(id) => self.transactional_delete(key, id),
+            None => {
+                if self.global_transaction_is_active(){
+                    return self.transactional_delete(key, GLOBAL_TRANSACTION_ID);
+                } else {
+                    return self.delete(key);
+                }
+            }
         }
     }
 
@@ -881,6 +930,65 @@ mod tests {
         );
         Storage::delete_db_files(store)?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_value() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.set("test", "test_value", None)?;
+        assert_eq!(store.get("test")?, Some("test_value".to_string()));
+        store.remove("test", None)?;
+        assert_eq!(store.get::<&str, String>("test")?, None);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+        #[test]
+    fn test_global_transaction_commit() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.begin_global_transaction();
+        assert!(store.global_transaction_is_active());
+        store.set("test1", "test_value1", None)?;
+        store.set("test2", "test_value2", None)?;
+        store.commit_global_transaction()?;
+
+        assert_eq!(store.get("test1")?, Some("test_value1".to_string()));
+        assert_eq!(store.get("test2")?, Some("test_value2".to_string()));
+        assert_eq!(store.get::<&str, String>("test3")?, None);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_global_transaction_rollback() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.begin_global_transaction();
+        assert!(store.global_transaction_is_active());
+        store.set("test1", "test_value1", None)?;
+        store.set("test2", "test_value2", None)?;
+        store.rollback_global_transaction()?;
+
+        assert_eq!(store.read("test1")?, None);
+        assert_eq!(store.read("test2")?, None);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_gloabal_transactional_delete() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.set("test1", "test_value1", None)?;
+        store.begin_global_transaction();
+        assert!(store.global_transaction_is_active());
+        store.remove("test1", None)?;
+        store.commit_global_transaction()?;
+
+        assert_eq!(store.get::<&str, String>("test1")?, None);
+
+        Storage::delete_db_files(store)?;
         Ok(())
     }
 }
