@@ -1,11 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rng, RngCore};
 use std::{env, fs, path::PathBuf};
-use storage_backend::{
-    error::StorageError,
-    storage::Storage,
-    storage_config::StorageConfig,
-};
+use storage_backend::{error::StorageError, storage::Storage, storage_config::StorageConfig};
 
 fn temp_storage() -> PathBuf {
     let dir = env::temp_dir();
@@ -21,8 +17,7 @@ fn backup_temp_storage() -> PathBuf {
     dir.join(format!("backup_{}", index))
 }
 
-fn create_path_and_storage(
-) -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
+fn create_path_and_storage() -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
     let path = &temp_storage();
 
     let config = StorageConfig {
@@ -66,6 +61,8 @@ fn bench_create_backup(c: &mut Criterion) {
     let mut group = c.benchmark_group("backup");
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
+    let dek_path = backup_temp_storage();
+    let password = "password".to_string();
 
     let (_, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
@@ -74,12 +71,19 @@ fn bench_create_backup(c: &mut Criterion) {
         .sample_size(10)
         .bench_function(BenchmarkId::new("create_backup", number_of_items), |b| {
             b.iter(|| {
-                storage.backup(backup_path.clone()).unwrap();
+                storage
+                    .backup(
+                        backup_path.clone(),
+                        dek_path.clone(),
+                        password.clone().into(),
+                    )
+                    .unwrap();
             });
         });
 
     Storage::delete_db_files(storage).unwrap();
     fs::remove_file(backup_path).unwrap();
+    fs::remove_file(dek_path).unwrap();
     group.finish();
 }
 
@@ -87,10 +91,18 @@ fn bench_restore_backup(c: &mut Criterion) {
     let mut group = c.benchmark_group("backup");
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
+    let dek_path = backup_temp_storage();
+    let password = "password".to_string();
 
     let (_, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
-    storage.backup(backup_path.clone()).unwrap();
+    storage
+        .backup(
+            backup_path.clone(),
+            dek_path.clone(),
+            password.clone().into(),
+        )
+        .unwrap();
     Storage::delete_db_files(storage).unwrap();
     let (_, _, store) = create_path_and_storage().unwrap();
 
@@ -98,13 +110,16 @@ fn bench_restore_backup(c: &mut Criterion) {
         BenchmarkId::new("restore_backup", number_of_items),
         |b| {
             b.iter(|| {
-                store.restore_backup(&backup_path).unwrap();
+                store
+                    .restore_backup(&backup_path, &dek_path, password.clone().into())
+                    .unwrap();
             });
         },
     );
 
     Storage::delete_db_files(store).unwrap();
     fs::remove_file(backup_path).unwrap();
+    fs::remove_file(dek_path).unwrap();
     group.finish();
 }
 

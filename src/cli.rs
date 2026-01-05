@@ -1,10 +1,10 @@
+use clap::{Parser, Subcommand};
+use redact::Secret;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use storage_backend::storage::Storage;
 use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
-
-use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -19,15 +19,19 @@ struct StorageSettings {
     #[clap(short, long, default_value = "storage.db")]
     storage_path: PathBuf,
     #[clap(short, long)]
-    password: Option<String>,
+    password: Option<Secret<String>>,
     #[clap(short, long, value_parser = parse_password_policy_config)]
     password_policy_config: Option<PasswordPolicyConfig>,
 }
 
 #[derive(Parser, Debug, Clone)]
-struct BackupPath {
+struct BackupSettings {
     #[clap(short, long, default_value = "backup")]
     backup_path: PathBuf,
+    #[clap(short, long, default_value = "dek")]
+    dek_path: PathBuf,
+    #[clap(short, long, default_value = "password")]
+    password: Secret<String>,
     #[clap(flatten)]
     storage_settings: StorageSettings,
 }
@@ -59,13 +63,19 @@ enum Action {
     PartialCompare(StorageAndKey),
     Contains(StorageAndKey),
     ListKeys(StorageSettings),
-    Backup(BackupPath),
-    RestoreBackup(BackupPath),
+    Backup(BackupSettings),
+    RestoreBackup(BackupSettings),
     ChangePassword {
         #[clap(flatten)]
         storage_settings: StorageSettings,
         #[clap(short, long)]
-        new_password: String,
+        new_password: Secret<String>,
+    },
+    ChangeBackupPassword {
+        #[clap(flatten)]
+        backup_settings: BackupSettings,
+        #[clap(short, long)]
+        new_password: Secret<String>,
     },
     Dump {
         #[clap(flatten)]
@@ -92,13 +102,16 @@ impl Action {
             Action::ChangePassword {
                 storage_settings, ..
             } => &storage_settings.storage_path,
+            Action::ChangeBackupPassword {
+                backup_settings, ..
+            } => &backup_settings.storage_settings.storage_path,
             Action::Dump {
                 storage_settings, ..
             } => &storage_settings.storage_path,
         }
     }
 
-    fn get_encryption_password(&self) -> Option<String> {
+    fn get_encryption_password(&self) -> Option<Secret<String>> {
         match self {
             Action::New(args) => args.password.clone(),
             Action::Write(args) => args.storage_settings.password.clone(),
@@ -112,6 +125,9 @@ impl Action {
             Action::ChangePassword {
                 storage_settings, ..
             } => storage_settings.password.clone(),
+            Action::ChangeBackupPassword {
+                backup_settings, ..
+            } => backup_settings.storage_settings.password.clone(),
             Action::Dump {
                 storage_settings, ..
             } => storage_settings.password.clone(),
@@ -179,7 +195,8 @@ pub fn run(args: Cli) -> Result<(), String> {
                 args.action.get_encryption_password(),
             );
             if let Some(password_policy) = args.action.get_password_policy_config() {
-                Storage::open_with_policy(&config, Some(password_policy)).map_err(|e| e.to_string())?
+                Storage::open_with_policy(&config, Some(password_policy))
+                    .map_err(|e| e.to_string())?
             } else {
                 Storage::open(&config).map_err(|e| e.to_string())?
             }
@@ -250,17 +267,25 @@ pub fn run(args: Cli) -> Result<(), String> {
                 println!("{}", key);
             }
         }
-        Action::Backup(backup) => {
+        Action::Backup(backup_settings) => {
             storage
-                .backup(&backup.backup_path)
+                .backup(
+                    &backup_settings.backup_path,
+                    &backup_settings.dek_path,
+                    backup_settings.password,
+                )
                 .map_err(|e| e.to_string())?;
-            println!("Backup created at {:?}", backup.backup_path);
+            println!("Backup created at {:?}", backup_settings.backup_path);
         }
-        Action::RestoreBackup(backup) => {
+        Action::RestoreBackup(backup_settings) => {
             storage
-                .restore_backup(&backup.backup_path)
+                .restore_backup(
+                    &backup_settings.backup_path,
+                    &backup_settings.dek_path,
+                    backup_settings.password,
+                )
                 .map_err(|e| e.to_string())?;
-            println!("Backup restored from {:?}", backup.backup_path);
+            println!("Backup restored from {:?}", backup_settings.backup_path);
         }
         Action::ChangePassword {
             storage_settings,
@@ -279,6 +304,20 @@ pub fn run(args: Cli) -> Result<(), String> {
             println!(
                 "Password changed for storage at {:?}",
                 storage_settings.storage_path
+            );
+        }
+        Action::ChangeBackupPassword {
+            backup_settings,
+            new_password,
+        } => {
+            let old_password = backup_settings.password;
+
+            storage
+                .change_backup_password(&backup_settings.dek_path, old_password, new_password)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "Backup password changed for storage at {:?}",
+                backup_settings.storage_settings.storage_path
             );
         }
         Action::Dump {

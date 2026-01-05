@@ -1,3 +1,4 @@
+use redact::Secret;
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -11,17 +12,11 @@ pub struct PasswordPolicyConfig {
 #[derive(Clone, Debug, Deserialize)]
 pub struct StorageConfig {
     pub path: String,
-    pub password: Option<String>,
+    pub password: Option<Secret<String>>,
 }
 
 impl StorageConfig {
-    pub fn new(
-        path: String,
-        password: Option<String>,
-    ) -> Self {
-        Self {
-            path,
-            password,
-        }
+    pub fn new(path: String, password: Option<Secret<String>>) -> Self {
+        Self { path, password }
     }
 }
