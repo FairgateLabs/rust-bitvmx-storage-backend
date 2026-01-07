@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rng, RngCore};
+use redact::Secret;
 use std::{env, fs, path::PathBuf};
 use storage_backend::{error::StorageError, storage::Storage, storage_config::StorageConfig};
 
@@ -62,7 +63,7 @@ fn bench_create_backup(c: &mut Criterion) {
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
     let dek_path = backup_temp_storage();
-    let password = "password".to_string();
+    let password = Secret::from("password");
 
     let (_, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
@@ -72,11 +73,7 @@ fn bench_create_backup(c: &mut Criterion) {
         .bench_function(BenchmarkId::new("create_backup", number_of_items), |b| {
             b.iter(|| {
                 storage
-                    .backup(
-                        backup_path.clone(),
-                        dek_path.clone(),
-                        password.clone().into(),
-                    )
+                    .backup(backup_path.clone(), dek_path.clone(), password.clone())
                     .unwrap();
             });
         });
@@ -92,16 +89,12 @@ fn bench_restore_backup(c: &mut Criterion) {
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
     let dek_path = backup_temp_storage();
-    let password = "password".to_string();
+    let password = Secret::from("password");
 
     let (_, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
     storage
-        .backup(
-            backup_path.clone(),
-            dek_path.clone(),
-            password.clone().into(),
-        )
+        .backup(backup_path.clone(), dek_path.clone(), password.clone())
         .unwrap();
     Storage::delete_db_files(storage).unwrap();
     let (_, _, store) = create_path_and_storage().unwrap();
@@ -111,7 +104,7 @@ fn bench_restore_backup(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 store
-                    .restore_backup(&backup_path, &dek_path, password.clone().into())
+                    .restore_backup(&backup_path, &dek_path, password.clone())
                     .unwrap();
             });
         },

@@ -1,11 +1,16 @@
-use age::{Decryptor, Encryptor, scrypt::Identity, secrecy::SecretString, stream::{StreamReader, StreamWriter}};
+use age::{
+    scrypt::Identity,
+    secrecy::SecretString,
+    stream::{StreamReader, StreamWriter},
+    Decryptor, Encryptor,
+};
 use std::io::{self, BufRead, Read, Write};
 
 pub struct BackupFileWriter<W: Write> {
     inner: StreamWriter<W>,
 }
 
-impl <W: Write> BackupFileWriter<W> {
+impl<W: Write> BackupFileWriter<W> {
     pub fn new(writer: W, password: Vec<u8>) -> io::Result<Self> {
         let passphrase = SecretString::new(hex::encode(password).into());
         let encryptor = Encryptor::with_user_passphrase(passphrase);
@@ -30,7 +35,6 @@ impl<W: Write> Write for BackupFileWriter<W> {
     }
 }
 
-
 pub struct BackupFileReader<R: Read> {
     inner: StreamReader<R>,
     buf: Vec<u8>,
@@ -38,16 +42,17 @@ pub struct BackupFileReader<R: Read> {
     cap: usize,
 }
 
-impl <R: Read> BackupFileReader<R> {
+impl<R: Read> BackupFileReader<R> {
     pub fn new(reader: R, password: Vec<u8>) -> io::Result<Self> {
         let passphrase = SecretString::new(hex::encode(password).into());
-        let decryptor = Decryptor::new(reader)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let decryptor =
+            Decryptor::new(reader).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
         let identities: Vec<Box<dyn age::Identity>> = vec![Box::new(Identity::new(passphrase))];
-        let stream_reader = decryptor.decrypt(identities.iter().map(|i| i.as_ref()))
+        let stream_reader = decryptor
+            .decrypt(identities.iter().map(|i| i.as_ref()))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        
+
         Ok(BackupFileReader {
             inner: stream_reader,
             buf: vec![0; 8192],
@@ -81,4 +86,3 @@ impl<R: Read> Read for BackupFileReader<R> {
         Ok(n)
     }
 }
-
