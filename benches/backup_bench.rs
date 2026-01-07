@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rng, RngCore};
+use redact::Secret;
 use std::{env, fs, path::PathBuf};
 use storage_backend::{
     error::StorageError,
@@ -67,7 +68,7 @@ fn bench_create_backup(c: &mut Criterion) {
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
     let dek_path = backup_temp_storage();
-    let password = "password".to_string();
+    let password = Secret::from("password");
 
     let (_, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
@@ -91,7 +92,7 @@ fn bench_restore_backup(c: &mut Criterion) {
     let number_of_items = 1_000_000;
     let backup_path = backup_temp_storage();
     let dek_path = backup_temp_storage();
-    let password = "password".to_string();
+    let password = Secret::from("password");
 
     let (_, _, storage) = create_path_and_storage().unwrap();
     write_db(&storage, number_of_items);
