@@ -516,8 +516,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn begin_global_transaction(&self) {
-        self.create_transaction(GLOBAL_TRANSACTION_ID);
+    pub fn begin_global_transaction(&self) -> Result<(), StorageError> {
+        if !self.global_transaction_is_active() {
+            Ok(self.create_transaction(GLOBAL_TRANSACTION_ID))
+        } else {
+            Err(StorageError::GlobalTransactionAlreadyActiveError)
+        }
     }
     
     pub fn commit_global_transaction(&self) -> Result<(), StorageError> {
@@ -673,6 +677,7 @@ mod tests {
     use redact::Secret;
     use std::env;
 
+    // Helper: create a unique temporary path for a RocksDB storage directory.
     fn temp_storage() -> PathBuf {
         let dir = env::temp_dir();
         let mut rang = rng();
@@ -680,16 +685,19 @@ mod tests {
         dir.join(format!("storage_{}.db", index))
     }
 
+    // Helper: create unique temporary paths for a backup file and its dek file.
     fn temp_backup() -> (PathBuf, PathBuf) {
         let dir = env::temp_dir();
-        let mut rang = rng();
-        let index = rang.next_u32();
+        let mut rng = rng();
+        let index = rng.next_u32();
         (
             dir.join(format!("backup_{}", index)),
             dir.join(format!("dek_{}", index)),
         )
     }
 
+    // Helper: create a StorageConfig and Storage instance. If is_encrypted is true,
+    // set a password (so the DB will be encrypted); otherwise open without password.
     fn create_path_and_storage(
         is_encrypted: bool,
     ) -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
@@ -719,6 +727,7 @@ mod tests {
         Ok((path.clone(), config, storage))
     }
 
+    // Test that a newly created storage starts empty.
     #[test]
     fn test_new_storage_starts_empty() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -727,6 +736,7 @@ mod tests {
         Ok(())
     }
 
+    // Test writing a plain key/value and reading it back.
     #[test]
     fn test_add_value_to_storage() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -736,6 +746,7 @@ mod tests {
         Ok(())
     }
 
+    // Another read test that uses read() returned Result.
     #[test]
     fn test_read_a_value() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -745,6 +756,7 @@ mod tests {
         Ok(())
     }
 
+    // Test deleting a key removes it from the DB.
     #[test]
     fn test_delete_value() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -756,6 +768,7 @@ mod tests {
         Ok(())
     }
 
+    // Test partial prefix search returns matching entries in order until the prefix no longer matches.
     #[test]
     fn test_find_multiple_answers() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -778,6 +791,7 @@ mod tests {
         Ok(())
     }
 
+    // Test has_key returns true for existing keys and false otherwise.
     #[test]
     fn test_has_key() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -788,6 +802,7 @@ mod tests {
         Ok(())
     }
 
+    // Test that closing (drop) and reopening the DB works and data persists.
     #[test]
     fn test_open_storage() -> Result<(), StorageError> {
         let (_, config, store) = create_path_and_storage(false)?;
@@ -805,6 +820,7 @@ mod tests {
         Ok(())
     }
 
+    // Opening when DB doesn't exist should fail (since open expects existing DB).
     #[test]
     fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
@@ -818,6 +834,7 @@ mod tests {
         Ok(())
     }
 
+    // Test keys() returns all keys in the DB.
     #[test]
     fn test_keys() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -837,28 +854,34 @@ mod tests {
         Ok(())
     }
 
+    // Test starting a transaction, transactional writes, and committing makes them visible.
     #[test]
     fn test_transaction_commit() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         let transaction_id = store.begin_transaction();
         store.transactional_write("test1", "test_value1", transaction_id)?;
         store.transactional_write("test2", "test_value2", transaction_id)?;
+        // Not yet committed: reads must return None
+        assert_eq!(store.read("test1")?, None);
+        assert_eq!(store.read("test2")?, None);
         store.commit_transaction(transaction_id)?;
 
         assert_eq!(store.read("test1")?, Some("test_value1".to_string()));
         assert_eq!(store.read("test2")?, Some("test_value2".to_string()));
-        assert_eq!(store.read("test3")?, None);
 
         Storage::delete_db_files(store)?;
         Ok(())
     }
 
+    // Test that rolling back a transaction discards transactional writes.
     #[test]
     fn test_transaction_rollback() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         let transaction_id = store.begin_transaction();
         store.transactional_write("test1", "test_value1", transaction_id)?;
         store.transactional_write("test2", "test_value2", transaction_id)?;
+        assert_eq!(store.read("test1")?, None);
+        assert_eq!(store.read("test2")?, None);
         store.rollback_transaction(transaction_id)?;
 
         assert_eq!(store.read("test1")?, None);
@@ -868,20 +891,25 @@ mod tests {
         Ok(())
     }
 
+    // Test transactional delete: deletion inside a transaction does not apply until commit.
     #[test]
     fn test_transactional_delete() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1")?;
         let transaction_id = store.begin_transaction();
         store.transactional_delete("test1", transaction_id).unwrap();
+        // Still visible before commit
+        assert_eq!(store.read("test1").unwrap(), Some("test_value1".to_string()));
         store.commit_transaction(transaction_id).unwrap();
 
+        // Gone after commit
         assert_eq!(store.read("test1").unwrap(), None);
 
         Storage::delete_db_files(store)?;
         Ok(())
     }
 
+    // Ensure that uncommitted transactions in a second transaction don't affect visibility.
     #[test]
     fn test_non_commited_transactions_should_not_appear() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -899,6 +927,7 @@ mod tests {
             .transactional_write("test3", "test_value3", second_transaction_id)
             .unwrap();
 
+        // test3 is not visible because the second transaction is not committed
         assert_eq!(
             store.read("test1").unwrap(),
             Some("test_value1".to_string())
@@ -914,6 +943,7 @@ mod tests {
         Ok(())
     }
 
+    // Test encryption: create encrypted storage and verify set/get serializing via KeyValueStore.
     #[test]
     fn test_encrypt_and_decrypt() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(true)?;
@@ -931,6 +961,7 @@ mod tests {
         Ok(())
     }
 
+    // Test backup writes a backup file and a dek file to disk.
     #[test]
     fn test_backup() -> Result<(), StorageError> {
         let (backup_path, dek_path) = temp_backup();
@@ -945,6 +976,7 @@ mod tests {
         Ok(())
     }
 
+    // Test restore_backup imports data from a backup into a fresh DB.
     #[test]
     fn test_restore_backup() -> Result<(), StorageError> {
         let (backup_path, dek_path) = temp_backup();
@@ -954,6 +986,7 @@ mod tests {
         store.write("test2", "test_value2")?;
         store.backup(&backup_path, &dek_path, password.clone())?;
 
+        // Remove original DB and create a new empty one, then restore
         Storage::delete_db_files(store)?;
         let store = Storage::new(&config)?;
         store.restore_backup(&backup_path, &dek_path, password)?;
@@ -967,6 +1000,7 @@ mod tests {
         Ok(())
     }
 
+    // Test backing up more than 1000 entries to ensure the batching logic works.
     #[test]
     fn test_more_than_1000_values_to_backup() -> Result<(), StorageError> {
         let quantity = 1500;
@@ -997,6 +1031,7 @@ mod tests {
         Ok(())
     }
 
+    // Test changing the DB password re-encrypts the DEK and the new password can open the DB.
     #[test]
     fn test_change_password() -> Result<(), StorageError> {
         let (path, _, store) = create_path_and_storage(true)?;
@@ -1006,6 +1041,7 @@ mod tests {
 
         drop(store);
 
+        // Open with new password and verify data is accessible
         let store = Storage::new_with_policy(
             &StorageConfig {
                 path: path.to_string_lossy().to_string(),
@@ -1028,6 +1064,7 @@ mod tests {
         Ok(())
     }
 
+    // Test KeyValueStore remove() saves deletion (non-transactional).
     #[test]
     fn test_remove_value() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -1039,13 +1076,17 @@ mod tests {
         Ok(())
     }
 
-        #[test]
+    // Test global (single shared) transaction commit: using None transaction_id respects global tx state.
+    #[test]
     fn test_global_transaction_commit() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.begin_global_transaction();
+        store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
+        // Using set with trasanction_id = None should apply to the global transaction
         store.set("test1", "test_value1", None)?;
         store.set("test2", "test_value2", None)?;
+        assert_eq!(store.get::<&str, String>("test1")?, None);
+        assert_eq!(store.get::<&str, String>("test2")?, None);
         store.commit_global_transaction()?;
 
         assert_eq!(store.get("test1")?, Some("test_value1".to_string()));
@@ -1056,34 +1097,87 @@ mod tests {
         Ok(())
     }
 
+    // Test global transaction rollback discards changes made while active.
     #[test]
     fn test_global_transaction_rollback() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.begin_global_transaction();
+        store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
         store.set("test1", "test_value1", None)?;
         store.set("test2", "test_value2", None)?;
+        assert_eq!(store.get::<&str, String>("test1")?, None);
+        assert_eq!(store.get::<&str, String>("test2")?, None);
         store.rollback_global_transaction()?;
 
-        assert_eq!(store.read("test1")?, None);
-        assert_eq!(store.read("test2")?, None);
+        assert_eq!(store.get::<&str, String>("test1")?, None);
+        assert_eq!(store.get::<&str, String>("test2")?, None);
 
         Storage::delete_db_files(store)?;
         Ok(())
     }
 
+    // Test deleting inside a global transaction behaves like transactional delete until commit.
     #[test]
-    fn test_gloabal_transactional_delete() -> Result<(), StorageError> {
+    fn test_global_transactional_delete() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.set("test1", "test_value1", None)?;
-        store.begin_global_transaction();
+        store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
         store.remove("test1", None)?;
-        store.commit_global_transaction()?;
+        // Still visible before commit
+        assert_eq!(store.get("test1")?, Some("test_value1".to_string()));
 
+        store.commit_global_transaction()?;
+        // Gone after commit
         assert_eq!(store.get::<&str, String>("test1")?, None);
 
         Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Starting a second global transaction should return an error.
+    #[test]
+    fn test_global_transaction_already_active() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.begin_global_transaction()?;
+        assert!(store.global_transaction_is_active());
+
+        let result = store.begin_global_transaction();
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::GlobalTransactionAlreadyActiveError) => {}
+            _ => panic!("Expected GlobalTransactionAlreadyActiveError"),
+        }
+        
+        store.commit_global_transaction()?;
+        Ok(())
+    }
+
+    // Committing or rollbacking when no global transaction is active should return a NotFound(Transaction) error.
+    #[test]
+    fn test_cant_commit_or_rollback_global_transaction_if_not_active() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        assert!(!store.global_transaction_is_active());
+
+        let result = store.commit_global_transaction();
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::NotFound(value)) => {
+                assert_eq!(value, "Transaction");
+            }
+            _ => panic!("Expected NotFound(Transaction) error"),
+
+        }
+
+        let result = store.rollback_global_transaction();
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::NotFound(value)) => {
+                assert_eq!(value, "Transaction");
+            }
+            _ => panic!("Expected NotFound(Transaction) error"),
+        }
+
         Ok(())
     }
 }
