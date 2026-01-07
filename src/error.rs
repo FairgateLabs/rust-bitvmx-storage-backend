@@ -32,4 +32,6 @@ pub enum StorageError {
     WrongPassword,
     #[error("No password set for the storage")]
     NoPasswordSet,
+    #[error("Global transaction is already active")]
+    GlobalTransactionAlreadyActiveError,
 }

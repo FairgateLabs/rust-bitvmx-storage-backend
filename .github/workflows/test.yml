@@ -1,0 +1,30 @@
+name: 'Storage Backend Test Action'
+on:
+  push:
+    branches: [ "main", "dev" ]
+    
+  pull_request:
+    branches: [ "main", "dev" ]
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  actions: read
+  checks: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: FairgateLabs/BitVMX-CI/.github/workflows/ci_local_template.yml@main
+    with:
+      repo: 'FairgateLabs/rust-bitvmx-workspace'
+      submodule_path: 'rust-bitvmx-storage-backend'
+      cargo_lock_path: 'rust-bitvmx-storage-backend/Cargo.lock'
+      target_path: 'rust-bitvmx-storage-backend/target'
+      submodule_branches: '{}'
+    secrets: inherit
