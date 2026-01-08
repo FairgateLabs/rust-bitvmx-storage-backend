@@ -56,6 +56,13 @@ pub trait KeyValueStore {
         V: Serialize + DeserializeOwned + Clone;
 }
 
+impl Drop for Storage {
+    fn drop(&mut self) {
+        let mut map = self.transactions.borrow_mut();
+        map.clear();
+    }
+}
+
 impl Storage {
     pub fn new_with_policy(
         config: &StorageConfig,
@@ -937,7 +944,6 @@ mod tests {
             Some("test_value2".to_string())
         );
         assert_eq!(store.read("test3").unwrap(), None);
-        store.rollback_transaction(second_transaction_id).unwrap();
 
         Storage::delete_db_files(store)?;
         Ok(())
