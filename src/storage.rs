@@ -1188,9 +1188,10 @@ mod tests {
         Ok(())
     }
 
+    // Test dropping the store rollback all transactions.
     #[test]
     fn test_drop_clears_transactions() -> Result<(), StorageError> {
-        let (_, _, store) = create_path_and_storage(false)?;
+        let (_, config, store) = create_path_and_storage(false)?;
         let transaction_id = store.begin_transaction();
         store
             .transactional_write("test1", "test_value1", transaction_id)
@@ -1198,8 +1199,9 @@ mod tests {
         assert!(store.transactions.borrow().contains_key(&transaction_id));
         drop(store);
         // After drop, the transactions map should be cleared.
-        // We cannot access store.transactions here since store is dropped,
-        // but we can ensure no panic occurs and resources are cleaned up.
-        Ok(())
+
+        let store = Storage::new(&config)?;
+        assert_eq!(store.read("test1")?.is_some(), false);
+        Ok(()) 
     }
 }
