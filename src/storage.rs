@@ -56,6 +56,14 @@ pub trait KeyValueStore {
         V: Serialize + DeserializeOwned + Clone;
 }
 
+// Clearing the transaction map is equivalent to rolling back all active transactions.
+impl Drop for Storage {
+    fn drop(&mut self) {
+        let mut map = self.transactions.borrow_mut();
+        map.clear();
+    }
+}
+
 impl Storage {
     pub fn new_with_policy(
         config: &StorageConfig,
@@ -937,7 +945,6 @@ mod tests {
             Some("test_value2".to_string())
         );
         assert_eq!(store.read("test3").unwrap(), None);
-        store.rollback_transaction(second_transaction_id).unwrap();
 
         Storage::delete_db_files(store)?;
         Ok(())
@@ -1179,5 +1186,22 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    // Test dropping the store rollback all transactions.
+    #[test]
+    fn test_drop_clears_transactions() -> Result<(), StorageError> {
+        let (_, config, store) = create_path_and_storage(false)?;
+        let transaction_id = store.begin_transaction();
+        store
+            .transactional_write("test1", "test_value1", transaction_id)
+            .unwrap();
+        assert!(store.transactions.borrow().contains_key(&transaction_id));
+        drop(store);
+        // After drop, the transactions map should be cleared.
+
+        let store = Storage::new(&config)?;
+        assert_eq!(store.read("test1")?.is_some(), false);
+        Ok(()) 
     }
 }
