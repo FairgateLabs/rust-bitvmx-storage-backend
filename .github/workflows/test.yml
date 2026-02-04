@@ -26,5 +26,4 @@ jobs:
       submodule_path: 'rust-bitvmx-storage-backend'
       cargo_lock_path: 'rust-bitvmx-storage-backend/Cargo.lock'
       target_path: 'rust-bitvmx-storage-backend/target'
-      submodule_branches: '{}'
     secrets: inherit
