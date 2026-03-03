@@ -4,7 +4,7 @@ use crate::{
     password_policy::PasswordPolicy,
     storage_config::{PasswordPolicyConfig, StorageConfig},
 };
-use cocoon::Cocoon;
+use cocoon::{Cocoon, MiniCocoon};
 use rand::{rngs::OsRng, TryRngCore};
 use redact::Secret;
 use rocksdb::TransactionDB;
@@ -531,7 +531,7 @@ impl Storage {
             Err(StorageError::GlobalTransactionAlreadyActiveError)
         }
     }
-    
+
     pub fn commit_global_transaction(&self) -> Result<(), StorageError> {
         self.commit_transaction(GLOBAL_TRANSACTION_ID)
     }
@@ -556,20 +556,31 @@ impl Storage {
     }
 
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
-        let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut cocoon = Cocoon::new(self.password.as_ref().unwrap());
-        cocoon
-            .dump(data, &mut entry_cursor)
-            .map_err(|error| StorageError::FailedToEncryptData { error })?;
-        Ok(entry_cursor.into_inner())
+        let key: &[u8; 32] = self
+            .password
+            .as_ref()
+            .unwrap()
+            .as_slice()
+            .try_into()
+            .expect("DEK is always 32 bytes");
+        let mut nonce_seed = [0u8; 32];
+        OsRng.try_fill_bytes(&mut nonce_seed)?;
+        MiniCocoon::from_key(key, &nonce_seed)
+            .wrap(&data)
+            .map_err(|error| StorageError::FailedToEncryptData { error })
     }
 
     fn decrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
-        let mut entry_cursor = Cursor::new(data);
-
-        let cocoon = Cocoon::new(self.password.as_ref().unwrap());
-        cocoon
-            .parse(&mut entry_cursor)
+        let key: &[u8; 32] = self
+            .password
+            .as_ref()
+            .unwrap()
+            .as_slice()
+            .try_into()
+            .expect("DEK is always 32 bytes");
+        // Nonce seed is not used during unwrap — the nonce is read from the ciphertext.
+        MiniCocoon::from_key(key, &[0u8; 32])
+            .unwrap(&data)
             .map_err(|error| StorageError::FailedToDecryptData { error })
     }
 }
@@ -615,10 +626,10 @@ impl KeyValueStore for Storage {
 
     fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
         where
-            K: AsRef<str> 
+            K: AsRef<str>
     {
         let key = key.as_ref();
-        
+
         match transaction_id {
             Some(id) => self.transactional_delete(key, id),
             None => {
@@ -1155,7 +1166,7 @@ mod tests {
             Err(StorageError::GlobalTransactionAlreadyActiveError) => {}
             _ => panic!("Expected GlobalTransactionAlreadyActiveError"),
         }
-        
+
         store.commit_global_transaction()?;
         Ok(())
     }
@@ -1202,6 +1213,6 @@ mod tests {
 
         let store = Storage::new(&config)?;
         assert_eq!(store.read("test1")?.is_some(), false);
-        Ok(()) 
+        Ok(())
     }
 }
