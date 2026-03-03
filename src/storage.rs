@@ -546,13 +546,18 @@ impl Storage {
         map.insert(
             transaction_id,
             Box::new(unsafe {
-                std::mem::transmute::<rocksdb::Transaction<'_, TransactionDB>, rocksdb::Transaction<'static, TransactionDB>>(transaction)
+                std::mem::transmute::<
+                    rocksdb::Transaction<'_, TransactionDB>,
+                    rocksdb::Transaction<'static, TransactionDB>,
+                >(transaction)
             }),
         );
     }
 
     fn global_transaction_is_active(&self) -> bool {
-        self.transactions.borrow().contains_key(&GLOBAL_TRANSACTION_ID)
+        self.transactions
+            .borrow()
+            .contains_key(&GLOBAL_TRANSACTION_ID)
     }
 
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
@@ -615,7 +620,7 @@ impl KeyValueStore for Storage {
         match transaction_id {
             Some(id) => self.transactional_write(key, &value, id),
             None => {
-                if self.global_transaction_is_active(){
+                if self.global_transaction_is_active() {
                     return self.transactional_write(key, &value, GLOBAL_TRANSACTION_ID);
                 } else {
                     return self.write(key, &value);
@@ -625,15 +630,15 @@ impl KeyValueStore for Storage {
     }
 
     fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
-        where
-            K: AsRef<str>
+    where
+        K: AsRef<str>,
     {
         let key = key.as_ref();
 
         match transaction_id {
             Some(id) => self.transactional_delete(key, id),
             None => {
-                if self.global_transaction_is_active(){
+                if self.global_transaction_is_active() {
                     return self.transactional_delete(key, GLOBAL_TRANSACTION_ID);
                 } else {
                     return self.delete(key);
@@ -918,7 +923,10 @@ mod tests {
         let transaction_id = store.begin_transaction();
         store.transactional_delete("test1", transaction_id).unwrap();
         // Still visible before commit
-        assert_eq!(store.read("test1").unwrap(), Some("test_value1".to_string()));
+        assert_eq!(
+            store.read("test1").unwrap(),
+            Some("test_value1".to_string())
+        );
         store.commit_transaction(transaction_id).unwrap();
 
         // Gone after commit
@@ -1184,7 +1192,6 @@ mod tests {
                 assert_eq!(value, "Transaction");
             }
             _ => panic!("Expected NotFound(Transaction) error"),
-
         }
 
         let result = store.rollback_global_transaction();
