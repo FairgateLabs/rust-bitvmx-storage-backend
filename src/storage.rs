@@ -4,7 +4,7 @@ use crate::{
     password_policy::PasswordPolicy,
     storage_config::{PasswordPolicyConfig, StorageConfig},
 };
-use cocoon::Cocoon;
+use cocoon::{Cocoon, MiniCocoon};
 use rand::{rngs::OsRng, TryRngCore};
 use redact::Secret;
 use rocksdb::TransactionDB;
@@ -531,7 +531,7 @@ impl Storage {
             Err(StorageError::GlobalTransactionAlreadyActiveError)
         }
     }
-    
+
     pub fn commit_global_transaction(&self) -> Result<(), StorageError> {
         self.commit_transaction(GLOBAL_TRANSACTION_ID)
     }
@@ -546,30 +546,46 @@ impl Storage {
         map.insert(
             transaction_id,
             Box::new(unsafe {
-                std::mem::transmute::<rocksdb::Transaction<'_, TransactionDB>, rocksdb::Transaction<'static, TransactionDB>>(transaction)
+                std::mem::transmute::<
+                    rocksdb::Transaction<'_, TransactionDB>,
+                    rocksdb::Transaction<'static, TransactionDB>,
+                >(transaction)
             }),
         );
     }
 
     fn global_transaction_is_active(&self) -> bool {
-        self.transactions.borrow().contains_key(&GLOBAL_TRANSACTION_ID)
+        self.transactions
+            .borrow()
+            .contains_key(&GLOBAL_TRANSACTION_ID)
     }
 
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
-        let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        let mut cocoon = Cocoon::new(self.password.as_ref().unwrap());
-        cocoon
-            .dump(data, &mut entry_cursor)
-            .map_err(|error| StorageError::FailedToEncryptData { error })?;
-        Ok(entry_cursor.into_inner())
+        let key: &[u8; 32] = self
+            .password
+            .as_ref()
+            .unwrap()
+            .as_slice()
+            .try_into()
+            .expect("DEK is always 32 bytes");
+        let mut nonce_seed = [0u8; 32];
+        OsRng.try_fill_bytes(&mut nonce_seed)?;
+        MiniCocoon::from_key(key, &nonce_seed)
+            .wrap(&data)
+            .map_err(|error| StorageError::FailedToEncryptData { error })
     }
 
     fn decrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
-        let mut entry_cursor = Cursor::new(data);
-
-        let cocoon = Cocoon::new(self.password.as_ref().unwrap());
-        cocoon
-            .parse(&mut entry_cursor)
+        let key: &[u8; 32] = self
+            .password
+            .as_ref()
+            .unwrap()
+            .as_slice()
+            .try_into()
+            .expect("DEK is always 32 bytes");
+        // Nonce seed is not used during unwrap — the nonce is read from the ciphertext.
+        MiniCocoon::from_key(key, &[0u8; 32])
+            .unwrap(&data)
             .map_err(|error| StorageError::FailedToDecryptData { error })
     }
 }
@@ -604,7 +620,7 @@ impl KeyValueStore for Storage {
         match transaction_id {
             Some(id) => self.transactional_write(key, &value, id),
             None => {
-                if self.global_transaction_is_active(){
+                if self.global_transaction_is_active() {
                     return self.transactional_write(key, &value, GLOBAL_TRANSACTION_ID);
                 } else {
                     return self.write(key, &value);
@@ -614,15 +630,15 @@ impl KeyValueStore for Storage {
     }
 
     fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
-        where
-            K: AsRef<str> 
+    where
+        K: AsRef<str>,
     {
         let key = key.as_ref();
-        
+
         match transaction_id {
             Some(id) => self.transactional_delete(key, id),
             None => {
-                if self.global_transaction_is_active(){
+                if self.global_transaction_is_active() {
                     return self.transactional_delete(key, GLOBAL_TRANSACTION_ID);
                 } else {
                     return self.delete(key);
@@ -907,7 +923,10 @@ mod tests {
         let transaction_id = store.begin_transaction();
         store.transactional_delete("test1", transaction_id).unwrap();
         // Still visible before commit
-        assert_eq!(store.read("test1").unwrap(), Some("test_value1".to_string()));
+        assert_eq!(
+            store.read("test1").unwrap(),
+            Some("test_value1".to_string())
+        );
         store.commit_transaction(transaction_id).unwrap();
 
         // Gone after commit
@@ -1155,7 +1174,7 @@ mod tests {
             Err(StorageError::GlobalTransactionAlreadyActiveError) => {}
             _ => panic!("Expected GlobalTransactionAlreadyActiveError"),
         }
-        
+
         store.commit_global_transaction()?;
         Ok(())
     }
@@ -1173,7 +1192,6 @@ mod tests {
                 assert_eq!(value, "Transaction");
             }
             _ => panic!("Expected NotFound(Transaction) error"),
-
         }
 
         let result = store.rollback_global_transaction();
@@ -1202,6 +1220,6 @@ mod tests {
 
         let store = Storage::new(&config)?;
         assert_eq!(store.read("test1")?.is_some(), false);
-        Ok(()) 
+        Ok(())
     }
 }
