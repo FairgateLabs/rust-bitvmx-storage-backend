@@ -3,7 +3,7 @@ use redact::Secret;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-use storage_backend::storage::Storage;
+use storage_backend::storage::{Storage, KeyValueStore};
 use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
 
 #[derive(Parser, Debug)]
@@ -209,7 +209,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         }
         Action::Write(storage_key_value) => {
             storage
-                .write(&storage_key_value.key, &storage_key_value.value)
+                .set(&storage_key_value.key, &storage_key_value.value, None)
                 .map_err(|e| e.to_string())?;
             println!(
                 "Wrote key {} with value {} to {:?}",
@@ -218,7 +218,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         }
         Action::Read(storage_and_key) => {
             match storage
-                .read(&storage_and_key.key)
+                .get::<&str, String>(&storage_and_key.key, None)
                 .map_err(|e| e.to_string())?
             {
                 Some(value) => println!(
@@ -233,7 +233,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         }
         Action::Delete(storage_and_key) => {
             storage
-                .delete(&storage_and_key.key)
+                .remove(&storage_and_key.key, None)
                 .map_err(|e| e.to_string())?;
             println!(
                 "Deleted key {} from {:?}",
@@ -242,7 +242,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         }
         Action::PartialCompare(storage_and_key) => {
             let keys = storage
-                .partial_compare(&storage_and_key.key)
+                .partial_compare(&storage_and_key.key, None)
                 .map_err(|e| e.to_string())?;
             println!(
                 "Keys partially matching {} in {:?}: {:?}",
@@ -251,7 +251,7 @@ pub fn run(args: Cli) -> Result<(), String> {
         }
         Action::Contains(storage_and_key) => {
             let contains = storage
-                .has_key(&storage_and_key.key)
+                .has_key(&storage_and_key.key, None)
                 .map_err(|e| e.to_string())?;
             println!(
                 "Key {} {} in {:?}",
@@ -261,7 +261,7 @@ pub fn run(args: Cli) -> Result<(), String> {
             );
         }
         Action::ListKeys(storage_settings) => {
-            let keys = storage.keys().map_err(|e| e.to_string())?;
+            let keys = storage.keys(None).map_err(|e| e.to_string())?;
             println!("Listing keys in: {:?}", storage_settings.storage_path);
             for key in keys {
                 println!("{}", key);
@@ -325,10 +325,10 @@ pub fn run(args: Cli) -> Result<(), String> {
             dump_file,
             pretty,
         } => {
-            let keys = storage.keys().map_err(|e| e.to_string())?;
+            let keys = storage.keys(None).map_err(|e| e.to_string())?;
             let mut json_map = serde_json::Map::new();
             for key in keys {
-                if let Some(value) = storage.read(&key).map_err(|e| e.to_string())? {
+                if let Some(value) = storage.get::<&str, String>(&key, None).map_err(|e| e.to_string())? {
                     let json_value: serde_json::Value =
                         serde_json::from_str(&value).map_err(|e| e.to_string())?;
                     json_map.insert(key, json_value);
