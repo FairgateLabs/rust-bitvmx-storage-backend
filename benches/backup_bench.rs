@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rng, RngCore};
 use redact::Secret;
 use std::{env, fs, path::PathBuf};
-use storage_backend::{error::StorageError, storage::Storage, storage_config::StorageConfig};
+use storage_backend::{error::StorageError, storage::{KeyValueStore, Storage}, storage_config::StorageConfig};
 
 fn temp_storage() -> PathBuf {
     let dir = env::temp_dir();
@@ -34,7 +34,7 @@ fn write_db(storage: &Storage, number_of_items: usize) {
     let tx = storage.begin_transaction();
     for i in 0..number_of_items {
         storage
-            .transactional_write(&format!("key_{}", i), &format!("value_{}", i), tx)
+            .set(&format!("key_{}", i), &format!("value_{}", i), Some(tx))
             .unwrap();
     }
     storage.commit_transaction(tx).unwrap();
