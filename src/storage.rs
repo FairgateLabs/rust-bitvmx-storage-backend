@@ -353,11 +353,7 @@ impl Storage {
         Ok(())
     }
 
-    fn delete(
-        &self,
-        key: &str,
-        transaction_id: Option<Uuid>,
-    ) -> Result<(), StorageError> {
+    fn delete(&self, key: &str, transaction_id: Option<Uuid>) -> Result<(), StorageError> {
         match transaction_id {
             Some(tx_id) => {
                 let mut map = self.transactions.borrow_mut();
@@ -408,16 +404,24 @@ impl Storage {
         Ok(())
     }
 
-    fn read(&self, key: &str, transaction_id: Option<Uuid>) -> Result<Option<String>, StorageError> {
+    fn read(
+        &self,
+        key: &str,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Option<String>, StorageError> {
         let data = match transaction_id {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
                 let tx = map
                     .get(&tx_id)
                     .ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                tx.get(key.as_bytes()).map_err(|_| StorageError::ReadError)?
+                tx.get(key.as_bytes())
+                    .map_err(|_| StorageError::ReadError)?
             }
-            None => self.db.get(key.as_bytes()).map_err(|_| StorageError::ReadError)?,
+            None => self
+                .db
+                .get(key.as_bytes())
+                .map_err(|_| StorageError::ReadError)?,
         };
 
         match data {
@@ -438,20 +442,26 @@ impl Storage {
         match transaction_id {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
-                let tx = map.get(&tx_id)
-                .ok_or(StorageError::NotFound("Transaction".to_string()))?;
+                let tx = map
+                    .get(&tx_id)
+                    .ok_or(StorageError::NotFound("Transaction".to_string()))?;
                 let result = tx.iterator(rocksdb::IteratorMode::Start).next().is_none();
                 Ok(result)
             }
             None => {
                 if self.global_transaction_is_active() {
                     let map = self.transactions.borrow();
-                    let tx = map.get(&GLOBAL_TRANSACTION_ID)
+                    let tx = map
+                        .get(&GLOBAL_TRANSACTION_ID)
                         .ok_or(StorageError::NotFound("Transaction".to_string()))?;
                     let result = tx.iterator(rocksdb::IteratorMode::Start).next().is_none();
                     Ok(result)
                 } else {
-                    Ok(self.db.iterator(rocksdb::IteratorMode::Start).next().is_none())
+                    Ok(self
+                        .db
+                        .iterator(rocksdb::IteratorMode::Start)
+                        .next()
+                        .is_none())
                 }
             }
         }
@@ -466,7 +476,6 @@ impl Storage {
             None => {
                 if self.global_transaction_is_active() {
                     self.retrieve_partial_keys(None, &mut result, Some(GLOBAL_TRANSACTION_ID))?;
-
                 } else {
                     self.retrieve_partial_keys(None, &mut result, None)?;
                 }
@@ -475,7 +484,11 @@ impl Storage {
         Ok(result)
     }
 
-    pub fn partial_compare_keys(&self, key: &str, transaction_id: Option<Uuid>) -> Result<Vec<String>, StorageError> {
+    pub fn partial_compare_keys(
+        &self,
+        key: &str,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<String>, StorageError> {
         let mut result = Vec::new();
 
         match transaction_id {
@@ -484,8 +497,11 @@ impl Storage {
             }
             None => {
                 if self.global_transaction_is_active() {
-                    self.retrieve_partial_keys(Some(key), &mut result, Some(GLOBAL_TRANSACTION_ID))?;
-
+                    self.retrieve_partial_keys(
+                        Some(key),
+                        &mut result,
+                        Some(GLOBAL_TRANSACTION_ID),
+                    )?;
                 } else {
                     self.retrieve_partial_keys(Some(key), &mut result, None)?;
                 }
@@ -495,7 +511,11 @@ impl Storage {
         Ok(result)
     }
 
-    pub fn partial_compare(&self, key: &str, transaction_id: Option<Uuid>) -> Result<Vec<(String, String)>, StorageError> {
+    pub fn partial_compare(
+        &self,
+        key: &str,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<(String, String)>, StorageError> {
         let mut result = Vec::new();
 
         match transaction_id {
@@ -505,7 +525,6 @@ impl Storage {
             None => {
                 if self.global_transaction_is_active() {
                     self.retrieve_partial_entries(key, &mut result, Some(GLOBAL_TRANSACTION_ID))?;
-
                 } else {
                     self.retrieve_partial_entries(key, &mut result, None)?;
                 }
@@ -515,11 +534,18 @@ impl Storage {
         Ok(result)
     }
 
-    fn retrieve_partial_keys(&self, key: Option<&str>, result: &mut Vec<String>, transaction_id: Option<Uuid>) -> Result<(), StorageError> {
+    fn retrieve_partial_keys(
+        &self,
+        key: Option<&str>,
+        result: &mut Vec<String>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<(), StorageError> {
         match transaction_id {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
-                let tx = map.get(&tx_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
+                let tx = map
+                    .get(&tx_id)
+                    .ok_or(StorageError::NotFound("Transaction".to_string()))?;
 
                 let mut iter = match key {
                     Some(k) => tx.iterator(rocksdb::IteratorMode::From(
@@ -530,7 +556,8 @@ impl Storage {
                 };
 
                 while let Some(Ok((k, _))) = iter.next() {
-                    let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let k =
+                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
 
                     if let Some(prefix) = key {
                         if k.starts_with(prefix) {
@@ -553,7 +580,8 @@ impl Storage {
                 };
 
                 while let Some(Ok((k, _))) = iter.next() {
-                    let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let k =
+                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
                     if let Some(prefix) = key {
                         if k.starts_with(prefix) {
                             result.push(k);
@@ -570,18 +598,26 @@ impl Storage {
         Ok(())
     }
 
-    fn retrieve_partial_entries(&self, key: &str, result: &mut Vec<(String, String)>, transaction_id: Option<Uuid>) -> Result<(), StorageError> {
+    fn retrieve_partial_entries(
+        &self,
+        key: &str,
+        result: &mut Vec<(String, String)>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<(), StorageError> {
         match transaction_id {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
-                let tx = map.get(&tx_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
+                let tx = map
+                    .get(&tx_id)
+                    .ok_or(StorageError::NotFound("Transaction".to_string()))?;
                 let mut iter = tx.iterator(rocksdb::IteratorMode::From(
                     key.as_bytes(),
                     rocksdb::Direction::Forward,
                 ));
-                
+
                 while let Some(Ok((k, v))) = iter.next() {
-                    let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let k =
+                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
                     let v = if self.password.is_some() {
                         self.decrypt_data(v.to_vec())?
                     } else {
@@ -602,7 +638,8 @@ impl Storage {
                 ));
 
                 while let Some(Ok((k, v))) = iter.next() {
-                    let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    let k =
+                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
                     let v = if self.password.is_some() {
                         self.decrypt_data(v.to_vec())?
                     } else {
@@ -625,16 +662,24 @@ impl Storage {
         let result = match transaction_id {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
-                let tx = map.get(&tx_id).ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                tx.get(key.as_bytes()).map_err(|_| StorageError::ReadError)?
+                let tx = map
+                    .get(&tx_id)
+                    .ok_or(StorageError::NotFound("Transaction".to_string()))?;
+                tx.get(key.as_bytes())
+                    .map_err(|_| StorageError::ReadError)?
             }
             None => {
                 if self.global_transaction_is_active() {
                     let map = self.transactions.borrow();
-                    let tx = map.get(&GLOBAL_TRANSACTION_ID).ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                    tx.get(key.as_bytes()).map_err(|_| StorageError::ReadError)?
+                    let tx = map
+                        .get(&GLOBAL_TRANSACTION_ID)
+                        .ok_or(StorageError::NotFound("Transaction".to_string()))?;
+                    tx.get(key.as_bytes())
+                        .map_err(|_| StorageError::ReadError)?
                 } else {
-                    self.db.get(key.as_bytes()).map_err(|_| StorageError::ReadError)?
+                    self.db
+                        .get(key.as_bytes())
+                        .map_err(|_| StorageError::ReadError)?
                 }
             }
         };
@@ -920,7 +965,10 @@ mod tests {
     fn test_add_value_to_storage() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.write("test", "test_value", None)?;
-        assert_eq!(store.read("test", None).unwrap(), Some("test_value".to_string()));
+        assert_eq!(
+            store.read("test", None).unwrap(),
+            Some("test_value".to_string())
+        );
         Storage::delete_db_files(store)?;
         Ok(())
     }
