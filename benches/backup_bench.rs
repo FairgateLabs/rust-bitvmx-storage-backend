@@ -2,7 +2,11 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use rand::{rng, RngCore};
 use redact::Secret;
 use std::{env, fs, path::PathBuf};
-use storage_backend::{error::StorageError, storage::{KeyValueStore, Storage}, storage_config::StorageConfig};
+use storage_backend::{
+    error::StorageError,
+    storage::{KeyValueStore, Storage},
+    storage_config::StorageConfig,
+};
 
 fn temp_storage() -> PathBuf {
     let dir = env::temp_dir();
