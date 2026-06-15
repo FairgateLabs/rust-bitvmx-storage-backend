@@ -104,8 +104,8 @@ impl App {
             return;
         }
 
-        let trimmed = self.prefix.trim_end_matches('/');
-        self.prefix = match trimmed.rfind('/') {
+        let trimmed = self.prefix.trim_end_matches(is_key_separator);
+        self.prefix = match trimmed.rfind(is_key_separator) {
             Some(index) => trimmed[..=index].to_string(),
             None => String::new(),
         };
@@ -148,7 +148,7 @@ pub fn run_tui(storage: &Storage) -> io::Result<()> {
                     KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
                     KeyCode::Up => app.select_previous(),
                     KeyCode::Down => app.select_next(),
-                    KeyCode::Enter => app.open_selected(),
+                    KeyCode::Enter | KeyCode::Right => app.open_selected(),
                     KeyCode::Left | KeyCode::Backspace => app.go_parent(),
                     KeyCode::Char('r') => {
                         if let Err(e) = app.refresh_keys(storage) {
@@ -187,10 +187,15 @@ fn draw(frame: &mut Frame<'_>, app: &App, storage: &Storage) {
 }
 
 fn draw_key_panel(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
+    let subtree_total = app
+        .all_keys
+        .iter()
+        .filter(|key| key.starts_with(&app.prefix))
+        .count();
     let title = if app.prefix.is_empty() {
-        format!("Keys: / ({} total)", app.all_keys.len())
+        format!("Keys: / ({subtree_total} total)")
     } else {
-        format!("Keys: {} ({} total)", app.prefix, app.all_keys.len())
+        format!("Keys: {} ({subtree_total} total)", app.prefix)
     };
 
     let items = if app.entries.is_empty() {
@@ -269,6 +274,16 @@ fn value_for_key(storage: &Storage, key: &str) -> String {
     }
 }
 
+fn is_key_separator(c: char) -> bool {
+    c == '/' || c == ':'
+}
+
+fn split_next_group(rest: &str) -> Option<(&str, char)> {
+    rest.char_indices()
+        .find(|(_, c)| is_key_separator(*c))
+        .map(|(index, separator)| (&rest[..index], separator))
+}
+
 fn build_entries(keys: &[String], prefix: &str) -> Vec<BrowserEntry> {
     let mut grouped: BTreeMap<String, Vec<&String>> = BTreeMap::new();
     let mut direct = Vec::new();
@@ -286,8 +301,11 @@ fn build_entries(keys: &[String], prefix: &str) -> Vec<BrowserEntry> {
             continue;
         }
 
-        if let Some((segment, _)) = rest.split_once('/') {
-            grouped.entry(segment.to_string()).or_default().push(key);
+        if let Some((segment, separator)) = split_next_group(rest) {
+            grouped
+                .entry(format!("{segment}{separator}"))
+                .or_default()
+                .push(key);
         } else {
             direct.push(BrowserEntry {
                 label: rest.to_string(),
@@ -301,10 +319,10 @@ fn build_entries(keys: &[String], prefix: &str) -> Vec<BrowserEntry> {
 
     let mut entries = Vec::new();
     for (segment, members) in grouped {
-        let group_prefix = format!("{prefix}{segment}/");
+        let group_prefix = format!("{prefix}{segment}");
         if members.len() > 1 {
             entries.push(BrowserEntry {
-                label: format!("{segment}/"),
+                label: segment,
                 display_path: group_prefix,
                 full_key: None,
                 is_group: true,
