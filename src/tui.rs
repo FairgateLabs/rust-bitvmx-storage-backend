@@ -5,13 +5,13 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::{collections::BTreeMap, io, time::Duration};
+use std::{collections::BTreeMap, fs::File, io, io::Write, time::Duration};
 use storage_backend::storage::{KeyValueStore, Storage};
 
 #[derive(Clone)]
@@ -29,13 +29,22 @@ enum FocusPanel {
     Value,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Normal,
+    ExportInput,
+}
+
 struct App {
     all_keys: Vec<String>,
     prefix: String,
     entries: Vec<BrowserEntry>,
     selected: usize,
+    selection_by_prefix: BTreeMap<String, usize>,
     value_scroll: u16,
     focus: FocusPanel,
+    mode: Mode,
+    export_file: String,
     status: String,
 }
 
@@ -49,9 +58,12 @@ impl App {
             prefix: String::new(),
             entries: Vec::new(),
             selected: 0,
+            selection_by_prefix: BTreeMap::new(),
             value_scroll: 0,
             focus: FocusPanel::Keys,
-            status: "Tab switch panel • Keys: ↑/↓ select, Enter/→ open, ← parent • Value: ↑/↓ scroll • r refresh • q/Esc quit"
+            mode: Mode::Normal,
+            export_file: String::new(),
+            status: "Tab switch panel • e export • Keys: ↑/↓ select, Enter/→ open, ← parent • Value: ↑/↓ scroll • r refresh • q/Esc quit"
                 .to_string(),
         };
         app.refresh_entries();
@@ -59,6 +71,7 @@ impl App {
     }
 
     fn refresh_keys(&mut self, storage: &Storage) -> Result<(), String> {
+        self.save_current_selection();
         self.all_keys = storage.keys(None).map_err(|e| e.to_string())?;
         self.all_keys.sort();
         self.refresh_entries();
@@ -69,7 +82,17 @@ impl App {
 
     fn refresh_entries(&mut self) {
         self.entries = build_entries(&self.all_keys, &self.prefix);
-        self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+        self.selected = self
+            .selection_by_prefix
+            .get(&self.prefix)
+            .copied()
+            .unwrap_or(0)
+            .min(self.entries.len().saturating_sub(1));
+    }
+
+    fn save_current_selection(&mut self) {
+        self.selection_by_prefix
+            .insert(self.prefix.clone(), self.selected);
     }
 
     fn selected_entry(&self) -> Option<&BrowserEntry> {
@@ -86,6 +109,7 @@ impl App {
         } else {
             self.selected -= 1;
         }
+        self.save_current_selection();
         self.value_scroll = 0;
     }
 
@@ -95,6 +119,7 @@ impl App {
         }
 
         self.selected = (self.selected + 1) % self.entries.len();
+        self.save_current_selection();
         self.value_scroll = 0;
     }
 
@@ -135,12 +160,55 @@ impl App {
         };
 
         if entry.is_group {
-            self.prefix = entry.display_path.clone();
-            self.selected = 0;
+            let next_prefix = entry.display_path.clone();
+            self.save_current_selection();
+            self.prefix = next_prefix;
             self.value_scroll = 0;
             self.refresh_entries();
             self.status = format!("Opened {}", self.prefix);
         }
+    }
+
+    fn start_export(&mut self) {
+        if self.selected_entry().is_none() {
+            self.status = "No key or group selected to export".to_string();
+            return;
+        }
+
+        self.mode = Mode::ExportInput;
+        self.export_file.clear();
+        self.status = "Enter export file path, Enter to export, Esc to cancel".to_string();
+    }
+
+    fn cancel_export(&mut self) {
+        self.mode = Mode::Normal;
+        self.export_file.clear();
+        self.status = "Export cancelled".to_string();
+    }
+
+    fn export_selected(&mut self, storage: &Storage) {
+        let Some(entry) = self.selected_entry().cloned() else {
+            self.status = "No key or group selected to export".to_string();
+            self.mode = Mode::Normal;
+            return;
+        };
+
+        let path = self.export_file.trim().to_string();
+        if path.is_empty() {
+            self.status = "Export file path cannot be empty".to_string();
+            return;
+        }
+
+        let result = export_entry(storage, &self.all_keys, &entry, &path);
+        self.mode = Mode::Normal;
+        self.export_file.clear();
+        self.status = match result {
+            Ok(count) => format!(
+                "Exported {count} entr{}",
+                if count == 1 { "y" } else { "ies" }
+            ),
+            Err(e) => format!("Export failed: {e}"),
+        };
     }
 
     fn go_parent(&mut self) {
@@ -148,12 +216,12 @@ impl App {
             return;
         }
 
+        self.save_current_selection();
         let trimmed = self.prefix.trim_end_matches(is_key_separator);
         self.prefix = match trimmed.rfind(is_key_separator) {
             Some(index) => trimmed[..=index].to_string(),
             None => String::new(),
         };
-        self.selected = 0;
         self.value_scroll = 0;
         self.refresh_entries();
         self.status = if self.prefix.is_empty() {
@@ -182,6 +250,9 @@ pub fn run_tui(storage: &Storage) -> io::Result<()> {
 
     let result = loop {
         terminal.draw(|frame| draw(frame, &app, storage))?;
+        if app.mode == Mode::ExportInput {
+            terminal.show_cursor()?;
+        }
 
         if event::poll(Duration::from_millis(200))? {
             if let Event::Key(key) = event::read()? {
@@ -189,9 +260,23 @@ pub fn run_tui(storage: &Storage) -> io::Result<()> {
                     continue;
                 }
 
+                if app.mode == Mode::ExportInput {
+                    match key.code {
+                        KeyCode::Esc => app.cancel_export(),
+                        KeyCode::Enter => app.export_selected(storage),
+                        KeyCode::Backspace => {
+                            app.export_file.pop();
+                        }
+                        KeyCode::Char(c) => app.export_file.push(c),
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
                     KeyCode::Tab => app.toggle_focus(),
+                    KeyCode::Char('e') => app.start_export(),
                     KeyCode::Up => match app.focus {
                         FocusPanel::Keys => app.select_previous(),
                         FocusPanel::Value => app.scroll_value_up(),
@@ -240,6 +325,81 @@ fn draw(frame: &mut Frame<'_>, app: &App, storage: &Storage) {
     let status = Paragraph::new(app.status.as_str())
         .block(Block::default().borders(Borders::ALL).title("Help"));
     frame.render_widget(status, chunks[1]);
+
+    if app.mode == Mode::ExportInput {
+        draw_export_popup(frame, app);
+    }
+}
+
+fn draw_export_popup(frame: &mut Frame<'_>, app: &App) {
+    let area = centered_rect_fixed_height(70, 10, frame.area());
+    frame.render_widget(Clear, area);
+
+    let selected = app
+        .selected_entry()
+        .map(|entry| {
+            if entry.is_group {
+                format!("Export group {}", entry.display_path)
+            } else {
+                format!("Export key {}", entry.display_path)
+            }
+        })
+        .unwrap_or_else(|| "Export nothing".to_string());
+
+    let block = Block::default().borders(Borders::ALL).title("Export");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    frame.render_widget(Paragraph::new(selected), chunks[0]);
+    frame.render_widget(Paragraph::new("File path"), chunks[1]);
+
+    let input = Paragraph::new(app.export_file.as_str())
+        .style(Style::default().fg(Color::Green))
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(input, chunks[2]);
+
+    frame.render_widget(
+        Paragraph::new("Enter: export  Esc: cancel")
+            .alignment(Alignment::Left)
+            .style(Style::default().fg(Color::Yellow)),
+        chunks[3],
+    );
+
+    let max_cursor_offset = chunks[2].width.saturating_sub(3) as usize;
+    let cursor_offset = app.export_file.chars().count().min(max_cursor_offset) as u16;
+    frame.set_cursor_position((chunks[2].x + 1 + cursor_offset, chunks[2].y + 1));
+}
+
+fn centered_rect_fixed_height(percent_x: u16, height: u16, area: Rect) -> Rect {
+    let vertical_margin = area.height.saturating_sub(height) / 2;
+    let popup_height = height.min(area.height);
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(vertical_margin),
+            Constraint::Length(popup_height),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
 }
 
 fn draw_key_panel(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect) {
@@ -349,6 +509,46 @@ fn value_for_key(storage: &Storage, key: &str) -> String {
         Ok(None) => "Key not found".to_string(),
         Err(e) => format!("Failed to read value: {e}"),
     }
+}
+
+fn export_entry(
+    storage: &Storage,
+    all_keys: &[String],
+    entry: &BrowserEntry,
+    path: &str,
+) -> Result<usize, String> {
+    let keys: Vec<&str> = if entry.is_group {
+        all_keys
+            .iter()
+            .filter(|key| key.starts_with(&entry.display_path))
+            .map(String::as_str)
+            .collect()
+    } else {
+        vec![entry
+            .full_key
+            .as_deref()
+            .unwrap_or(entry.display_path.as_str())]
+    };
+
+    let mut json_map = serde_json::Map::new();
+    for key in &keys {
+        let value = storage
+            .get::<&str, serde_json::Value>(key, None)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Key not found: {key}"))?;
+        json_map.insert((*key).to_string(), value);
+    }
+
+    let json = serde_json::Value::Object(json_map);
+    let mut file = File::create(path).map_err(|e| e.to_string())?;
+    file.write_all(
+        serde_json::to_string_pretty(&json)
+            .map_err(|e| e.to_string())?
+            .as_bytes(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(keys.len())
 }
 
 fn is_key_separator(c: char) -> bool {
