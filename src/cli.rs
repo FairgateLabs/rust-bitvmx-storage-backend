@@ -1,9 +1,11 @@
+#[cfg(feature = "ui")]
+use crate::tui::run_tui;
 use clap::{Parser, Subcommand};
 use redact::Secret;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-use storage_backend::storage::{Storage, KeyValueStore};
+use storage_backend::storage::{KeyValueStore, Storage};
 use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
 
 #[derive(Parser, Debug)]
@@ -54,6 +56,13 @@ struct StorageKeyValue {
     storage_settings: StorageSettings,
 }
 
+#[cfg(feature = "ui")]
+#[derive(Parser, Debug, Clone)]
+struct UiSettings {
+    config_path: PathBuf,
+    config_key: String,
+}
+
 #[derive(Subcommand, Debug)]
 enum Action {
     New(StorageSettings),
@@ -63,6 +72,8 @@ enum Action {
     PartialCompare(StorageAndKey),
     Contains(StorageAndKey),
     ListKeys(StorageSettings),
+    #[cfg(feature = "ui")]
+    Ui(UiSettings),
     Backup(BackupSettings),
     RestoreBackup(BackupSettings),
     ChangePassword {
@@ -97,6 +108,8 @@ impl Action {
             Action::PartialCompare(args) => &args.storage_settings.storage_path,
             Action::Contains(args) => &args.storage_settings.storage_path,
             Action::ListKeys(args) => &args.storage_path,
+            #[cfg(feature = "ui")]
+            Action::Ui(_) => unreachable!("ui opens storage from yaml before this helper is used"),
             Action::Backup(args) => &args.storage_settings.storage_path,
             Action::RestoreBackup(args) => &args.storage_settings.storage_path,
             Action::ChangePassword {
@@ -120,6 +133,8 @@ impl Action {
             Action::PartialCompare(args) => args.storage_settings.password.clone(),
             Action::Contains(args) => args.storage_settings.password.clone(),
             Action::ListKeys(args) => args.password.clone(),
+            #[cfg(feature = "ui")]
+            Action::Ui(_) => unreachable!("ui opens storage from yaml before this helper is used"),
             Action::Backup(args) => args.storage_settings.password.clone(),
             Action::RestoreBackup(args) => args.storage_settings.password.clone(),
             Action::ChangePassword {
@@ -172,6 +187,31 @@ fn parse_password_policy_config(str: &str) -> Result<PasswordPolicyConfig, Strin
     })
 }
 
+#[cfg(feature = "ui")]
+fn load_ui_storage_config(settings: &UiSettings) -> Result<StorageConfig, String> {
+    let content = std::fs::read_to_string(&settings.config_path)
+        .map_err(|e| format!("Failed to read {:?}: {e}", settings.config_path))?;
+    let root: serde_yaml::Value =
+        serde_yaml::from_str(&content).map_err(|e| format!("Invalid YAML: {e}"))?;
+    let mapping = root
+        .as_mapping()
+        .ok_or_else(|| "YAML root must be a mapping".to_string())?;
+    let section_key = serde_yaml::Value::String(settings.config_key.clone());
+    let section = mapping.get(&section_key).ok_or_else(|| {
+        format!(
+            "Key '{}' not found in {:?}",
+            settings.config_key, settings.config_path
+        )
+    })?;
+
+    serde_yaml::from_value::<StorageConfig>(section.clone()).map_err(|e| {
+        format!(
+            "Failed to deserialize '{}' from {:?} as StorageConfig: {e}",
+            settings.config_key, settings.config_path
+        )
+    })
+}
+
 pub fn run(args: Cli) -> Result<(), String> {
     let storage = match args.action {
         Action::New(storage_settings) => {
@@ -187,6 +227,13 @@ pub fn run(args: Cli) -> Result<(), String> {
             }
 
             println!("Created new storage at {:?}", storage_settings.storage_path);
+            return Ok(());
+        }
+        #[cfg(feature = "ui")]
+        Action::Ui(ui_settings) => {
+            let config = load_ui_storage_config(&ui_settings)?;
+            let storage = Storage::open(&config).map_err(|e| e.to_string())?;
+            run_tui(&storage).map_err(|e| e.to_string())?;
             return Ok(());
         }
         _ => {
@@ -267,6 +314,8 @@ pub fn run(args: Cli) -> Result<(), String> {
                 println!("{}", key);
             }
         }
+        #[cfg(feature = "ui")]
+        Action::Ui(_) => unreachable!("ui is handled before the regular storage command path"),
         Action::Backup(backup_settings) => {
             storage
                 .backup(
@@ -328,7 +377,10 @@ pub fn run(args: Cli) -> Result<(), String> {
             let keys = storage.keys(None).map_err(|e| e.to_string())?;
             let mut json_map = serde_json::Map::new();
             for key in keys {
-                if let Some(value) = storage.get::<&str, String>(&key, None).map_err(|e| e.to_string())? {
+                if let Some(value) = storage
+                    .get::<&str, String>(&key, None)
+                    .map_err(|e| e.to_string())?
+                {
                     let json_value: serde_json::Value =
                         serde_json::from_str(&value).map_err(|e| e.to_string())?;
                     json_map.insert(key, json_value);
