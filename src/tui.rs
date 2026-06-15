@@ -23,11 +23,19 @@ struct BrowserEntry {
     child_count: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FocusPanel {
+    Keys,
+    Value,
+}
+
 struct App {
     all_keys: Vec<String>,
     prefix: String,
     entries: Vec<BrowserEntry>,
     selected: usize,
+    value_scroll: u16,
+    focus: FocusPanel,
     status: String,
 }
 
@@ -41,7 +49,9 @@ impl App {
             prefix: String::new(),
             entries: Vec::new(),
             selected: 0,
-            status: "↑/↓ select • Enter open group • ←/Backspace parent • r refresh • q/Esc quit"
+            value_scroll: 0,
+            focus: FocusPanel::Keys,
+            status: "Tab switch panel • Keys: ↑/↓ select, Enter/→ open, ← parent • Value: ↑/↓ scroll • r refresh • q/Esc quit"
                 .to_string(),
         };
         app.refresh_entries();
@@ -52,6 +62,7 @@ impl App {
         self.all_keys = storage.keys(None).map_err(|e| e.to_string())?;
         self.all_keys.sort();
         self.refresh_entries();
+        self.value_scroll = 0;
         self.status = "Database keys refreshed".to_string();
         Ok(())
     }
@@ -75,6 +86,7 @@ impl App {
         } else {
             self.selected -= 1;
         }
+        self.value_scroll = 0;
     }
 
     fn select_next(&mut self) {
@@ -83,6 +95,37 @@ impl App {
         }
 
         self.selected = (self.selected + 1) % self.entries.len();
+        self.value_scroll = 0;
+    }
+
+    fn scroll_value_up(&mut self) {
+        self.value_scroll = self.value_scroll.saturating_sub(1);
+    }
+
+    fn scroll_value_down(&mut self) {
+        self.value_scroll = self.value_scroll.saturating_add(1);
+    }
+
+    fn toggle_focus(&mut self) {
+        if self.focus == FocusPanel::Keys
+            && self
+                .selected_entry()
+                .map(|entry| entry.is_group)
+                .unwrap_or(false)
+        {
+            self.status =
+                "Groups have no value panel content; open the group or select a key".to_string();
+            return;
+        }
+
+        self.focus = match self.focus {
+            FocusPanel::Keys => FocusPanel::Value,
+            FocusPanel::Value => FocusPanel::Keys,
+        };
+        self.status = match self.focus {
+            FocusPanel::Keys => "Focused keys panel".to_string(),
+            FocusPanel::Value => "Focused value panel; use ↑/↓ to scroll".to_string(),
+        };
     }
 
     fn open_selected(&mut self) {
@@ -94,6 +137,7 @@ impl App {
         if entry.is_group {
             self.prefix = entry.display_path.clone();
             self.selected = 0;
+            self.value_scroll = 0;
             self.refresh_entries();
             self.status = format!("Opened {}", self.prefix);
         }
@@ -110,6 +154,7 @@ impl App {
             None => String::new(),
         };
         self.selected = 0;
+        self.value_scroll = 0;
         self.refresh_entries();
         self.status = if self.prefix.is_empty() {
             "Back to root".to_string()
@@ -146,10 +191,21 @@ pub fn run_tui(storage: &Storage) -> io::Result<()> {
 
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
-                    KeyCode::Up => app.select_previous(),
-                    KeyCode::Down => app.select_next(),
-                    KeyCode::Enter | KeyCode::Right => app.open_selected(),
-                    KeyCode::Left | KeyCode::Backspace => app.go_parent(),
+                    KeyCode::Tab => app.toggle_focus(),
+                    KeyCode::Up => match app.focus {
+                        FocusPanel::Keys => app.select_previous(),
+                        FocusPanel::Value => app.scroll_value_up(),
+                    },
+                    KeyCode::Down => match app.focus {
+                        FocusPanel::Keys => app.select_next(),
+                        FocusPanel::Value => app.scroll_value_down(),
+                    },
+                    KeyCode::Enter | KeyCode::Right if app.focus == FocusPanel::Keys => {
+                        app.open_selected()
+                    }
+                    KeyCode::Left | KeyCode::Backspace if app.focus == FocusPanel::Keys => {
+                        app.go_parent()
+                    }
                     KeyCode::Char('r') => {
                         if let Err(e) = app.refresh_keys(storage) {
                             app.status = format!("Failed to refresh keys: {e}");
@@ -225,8 +281,18 @@ fn draw_key_panel(frame: &mut Frame<'_>, app: &App, area: ratatui::layout::Rect)
         state.select(Some(app.selected));
     }
 
+    let border_style = if app.focus == FocusPanel::Keys {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(title),
+        )
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
@@ -258,8 +324,19 @@ fn draw_value_panel(
         None => ("Value".to_string(), "No key selected".to_string()),
     };
 
+    let border_style = if app.focus == FocusPanel::Value {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
     let paragraph = Paragraph::new(body)
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(title),
+        )
+        .scroll((app.value_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
