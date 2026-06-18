@@ -534,6 +534,24 @@ impl Storage {
         Ok(result)
     }
 
+    /// Prefix scan that deserializes each stored value into `V`. The typed analog of `partial_compare`.
+    pub fn partial_get<V>(
+        &self,
+        key: &str,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<V>, StorageError>
+    where
+        V: DeserializeOwned,
+    {
+        let entries = self.partial_compare(key, transaction_id)?;
+        let mut values = Vec::with_capacity(entries.len());
+        for (_, value) in entries {
+            let value = serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
+            values.push(value);
+        }
+        Ok(values)
+    }
+
     fn retrieve_partial_keys(
         &self,
         key: Option<&str>,
@@ -1013,6 +1031,22 @@ mod tests {
                 ("test3".to_string(), "test_value3".to_string())
             ]
         );
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial_get deserializes each matching value into the requested type.
+    #[test]
+    fn test_partial_get_deserializes_values() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.set("item1", "value1".to_string(), None)?;
+        store.set("item2", "value2".to_string(), None)?;
+        store.set("other", "value3".to_string(), None)?; // outside the prefix
+
+        let mut values: Vec<String> = store.partial_get("item", None)?;
+        values.sort();
+        assert_eq!(values, vec!["value1".to_string(), "value2".to_string()]);
 
         Storage::delete_db_files(store)?;
         Ok(())
