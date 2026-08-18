@@ -7,7 +7,7 @@ use crate::{
 use cocoon::{Cocoon, MiniCocoon};
 use rand::{rngs::OsRng, TryRngCore};
 use redact::Secret;
-use rocksdb::TransactionDB;
+use rocksdb::{TransactionDB, WriteOptions};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use std::{
@@ -750,7 +750,10 @@ impl Storage {
     }
 
     fn create_transaction(&self, transaction_id: Uuid) {
-        let transaction = self.db.transaction();
+        let mut write_options = WriteOptions::default();
+        write_options.set_sync(true);
+
+        let transaction = self.db.transaction_opt(&write_options, &Default::default());
         let mut map = self.transactions.borrow_mut();
         map.insert(
             transaction_id,
