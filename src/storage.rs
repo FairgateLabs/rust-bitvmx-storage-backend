@@ -636,17 +636,16 @@ impl Storage {
                 while let Some(Ok((k, v))) = iter.next() {
                     let k =
                         String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    if !k.starts_with(key) {
+                        break;
+                    }
                     let v = if self.password.is_some() {
                         self.decrypt_data(v.to_vec())?
                     } else {
                         v.to_vec()
                     };
                     let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
-                    if k.starts_with(key) {
-                        result.push((k, v));
-                    } else {
-                        break;
-                    }
+                    result.push((k, v));
                 }
             }
             None => {
@@ -658,17 +657,16 @@ impl Storage {
                 while let Some(Ok((k, v))) = iter.next() {
                     let k =
                         String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+                    if !k.starts_with(key) {
+                        break;
+                    }
                     let v = if self.password.is_some() {
                         self.decrypt_data(v.to_vec())?
                     } else {
                         v.to_vec()
                     };
                     let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
-                    if k.starts_with(key) {
-                        result.push((k, v));
-                    } else {
-                        break;
-                    }
+                    result.push((k, v));
                 }
             }
         };
@@ -1034,6 +1032,19 @@ mod tests {
                 ("test3".to_string(), "test_value3".to_string())
             ]
         );
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial prefix search on an encrypted store does not decrypt entries outside the prefix.
+    #[test]
+    fn test_partial_compare_encrypted_ignores_out_of_range_entries() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(true)?;
+        store.write("AAA", "test_value", None)?;
+
+        let result = store.partial_compare("AAA", None)?;
+        assert_eq!(result, vec![("AAA".to_string(), "test_value".to_string())]);
 
         Storage::delete_db_files(store)?;
         Ok(())
