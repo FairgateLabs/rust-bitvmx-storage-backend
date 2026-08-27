@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use rand::{rng, RngCore};
+use rand::{rng, Rng};
 use redact::Secret;
 use std::{env, fs, path::PathBuf};
 use storage_backend::{
@@ -38,7 +38,7 @@ fn write_db(storage: &Storage, number_of_items: usize) {
     let tx = storage.begin_transaction();
     for i in 0..number_of_items {
         storage
-            .set(&format!("key_{}", i), &format!("value_{}", i), Some(tx))
+            .set(format!("key_{}", i), format!("value_{}", i), Some(tx))
             .unwrap();
     }
     storage.commit_transaction(tx).unwrap();

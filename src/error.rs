@@ -27,7 +27,7 @@ pub enum StorageError {
     #[error("Password does not meet complexity requirements. Required policy: {0:?}")]
     WeakPassword(PasswordPolicy),
     #[error("Error generating random DEK: {0}")]
-    RandomDekGenerationError(#[from] rand::rand_core::OsError),
+    RandomDekGenerationError(#[from] rand::rngs::SysError),
     #[error("Wrong password provided")]
     WrongPassword,
     #[error("No password set for the storage")]

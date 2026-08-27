@@ -5,7 +5,7 @@ use crate::{
     storage_config::{PasswordPolicyConfig, StorageConfig},
 };
 use cocoon::{Cocoon, MiniCocoon};
-use rand::{rngs::OsRng, TryRngCore};
+use rand::{rngs::SysRng, TryRng};
 use redact::Secret;
 use rocksdb::{TransactionDB, WriteOptions};
 use serde::{de::DeserializeOwned, Serialize};
@@ -127,7 +127,7 @@ impl Storage {
                 }
                 None => {
                     let mut bytes = [0u8; 32];
-                    OsRng.try_fill_bytes(&mut bytes)?;
+                    SysRng.try_fill_bytes(&mut bytes)?;
 
                     let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
                     let mut cocoon = Cocoon::new(password.expose_secret().as_bytes());
@@ -301,7 +301,7 @@ impl Storage {
         let mut item_counter = 0;
 
         let mut dek = [0u8; 32];
-        OsRng.try_fill_bytes(&mut dek)?;
+        SysRng.try_fill_bytes(&mut dek)?;
 
         let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
         let mut cocoon = Cocoon::new(password.expose_secret().as_bytes());
@@ -781,7 +781,7 @@ impl Storage {
             .try_into()
             .expect("DEK is always 32 bytes");
         let mut nonce_seed = [0u8; 32];
-        OsRng.try_fill_bytes(&mut nonce_seed)?;
+        SysRng.try_fill_bytes(&mut nonce_seed)?;
         MiniCocoon::from_key(key, &nonce_seed)
             .wrap(&data)
             .map_err(|error| StorageError::FailedToEncryptData { error })
@@ -918,7 +918,7 @@ fn create_options() -> rocksdb::Options {
 mod tests {
     use super::*;
     use crate::storage_config::PasswordPolicyConfig;
-    use rand::{rng, RngCore};
+    use rand::{rng, Rng};
     use redact::Secret;
     use std::env;
 
