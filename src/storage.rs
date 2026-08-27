@@ -468,20 +468,7 @@ impl Storage {
     }
 
     pub fn keys(&self, transaction_id: Option<Uuid>) -> Result<Vec<String>, StorageError> {
-        let mut result = Vec::new();
-        match transaction_id {
-            Some(tx_id) => {
-                self.retrieve_partial_keys(None, &mut result, Some(tx_id))?;
-            }
-            None => {
-                if self.global_transaction_is_active() {
-                    self.retrieve_partial_keys(None, &mut result, Some(GLOBAL_TRANSACTION_ID))?;
-                } else {
-                    self.retrieve_partial_keys(None, &mut result, None)?;
-                }
-            }
-        };
-        Ok(result)
+        self.partial_compare_keys_limited(None, None, transaction_id)
     }
 
     pub fn partial_compare_keys(
@@ -489,21 +476,44 @@ impl Storage {
         key: &str,
         transaction_id: Option<Uuid>,
     ) -> Result<Vec<String>, StorageError> {
+        self.partial_compare_keys_limited(Some(key), None, transaction_id)
+    }
+
+    /// Returns the lexicographically smallest matching key, `None` if nothing matches the prefix.
+    pub fn partial_compare_keys_first(
+        &self,
+        key: &str,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Option<String>, StorageError> {
+        let res = self
+            .partial_compare_keys_limited(Some(key), Some(1), transaction_id)?
+            .into_iter()
+            .next();
+        Ok(res)
+    }
+
+    fn partial_compare_keys_limited(
+        &self,
+        key: Option<&str>,
+        limit: Option<usize>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<String>, StorageError> {
         let mut result = Vec::new();
 
         match transaction_id {
             Some(tx_id) => {
-                self.retrieve_partial_keys(Some(key), &mut result, Some(tx_id))?;
+                self.retrieve_partial_keys(key, limit, &mut result, Some(tx_id))?;
             }
             None => {
                 if self.global_transaction_is_active() {
                     self.retrieve_partial_keys(
-                        Some(key),
+                        key,
+                        limit,
                         &mut result,
                         Some(GLOBAL_TRANSACTION_ID),
                     )?;
                 } else {
-                    self.retrieve_partial_keys(Some(key), &mut result, None)?;
+                    self.retrieve_partial_keys(key, limit, &mut result, None)?;
                 }
             }
         };
@@ -516,17 +526,44 @@ impl Storage {
         key: &str,
         transaction_id: Option<Uuid>,
     ) -> Result<Vec<(String, String)>, StorageError> {
+        self.partial_compare_limited(key, None, transaction_id)
+    }
+
+    /// Returns the matching entry with the lexicographically smallest key, `None` if nothing matches the prefix.
+    pub fn partial_compare_first(
+        &self,
+        key: &str,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Option<(String, String)>, StorageError> {
+        let res = self
+            .partial_compare_limited(key, Some(1), transaction_id)?
+            .into_iter()
+            .next();
+        Ok(res)
+    }
+
+    fn partial_compare_limited(
+        &self,
+        key: &str,
+        limit: Option<usize>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<(String, String)>, StorageError> {
         let mut result = Vec::new();
 
         match transaction_id {
             Some(tx_id) => {
-                self.retrieve_partial_entries(key, &mut result, Some(tx_id))?;
+                self.retrieve_partial_entries(key, limit, &mut result, Some(tx_id))?;
             }
             None => {
                 if self.global_transaction_is_active() {
-                    self.retrieve_partial_entries(key, &mut result, Some(GLOBAL_TRANSACTION_ID))?;
+                    self.retrieve_partial_entries(
+                        key,
+                        limit,
+                        &mut result,
+                        Some(GLOBAL_TRANSACTION_ID),
+                    )?;
                 } else {
-                    self.retrieve_partial_entries(key, &mut result, None)?;
+                    self.retrieve_partial_entries(key, limit, &mut result, None)?;
                 }
             }
         };
@@ -552,9 +589,30 @@ impl Storage {
         Ok(values)
     }
 
+    /// Prefix scan that deserializes the value of the lexicographically smallest key into `V`. The typed analog of `partial_compare_first`.
+    /// `None` if nothing matches the prefix.
+    pub fn partial_get_first<V>(
+        &self,
+        key: &str,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Option<V>, StorageError>
+    where
+        V: DeserializeOwned,
+    {
+        match self.partial_compare_first(key, transaction_id)? {
+            Some((_, entry)) => {
+                let value =
+                    serde_json::from_str(&entry).map_err(|_| StorageError::ConversionError)?;
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn retrieve_partial_keys(
         &self,
         key: Option<&str>,
+        limit: Option<usize>,
         result: &mut Vec<String>,
         transaction_id: Option<Uuid>,
     ) -> Result<(), StorageError> {
@@ -573,7 +631,7 @@ impl Storage {
                     None => tx.iterator(rocksdb::IteratorMode::Start),
                 };
 
-                self.collect_keys(iter, key, result)?;
+                self.collect_keys(iter, key, limit, result)?;
             }
             None => {
                 let iter = match key {
@@ -584,7 +642,7 @@ impl Storage {
                     None => self.db.iterator(rocksdb::IteratorMode::Start),
                 };
 
-                self.collect_keys(iter, key, result)?;
+                self.collect_keys(iter, key, limit, result)?;
             }
         };
 
@@ -595,6 +653,7 @@ impl Storage {
         &self,
         mut iter: I,
         key: Option<&str>,
+        limit: Option<usize>,
         result: &mut Vec<String>,
     ) -> Result<(), StorageError>
     where
@@ -608,6 +667,11 @@ impl Storage {
                 }
             }
             result.push(k);
+            if let Some(l) = limit {
+                if result.len() >= l {
+                    break;
+                }
+            }
         }
         Ok(())
     }
@@ -615,6 +679,7 @@ impl Storage {
     fn retrieve_partial_entries(
         &self,
         key: &str,
+        limit: Option<usize>,
         result: &mut Vec<(String, String)>,
         transaction_id: Option<Uuid>,
     ) -> Result<(), StorageError> {
@@ -629,7 +694,7 @@ impl Storage {
                     rocksdb::Direction::Forward,
                 ));
 
-                self.collect_entries(iter, key, result)?;
+                self.collect_entries(iter, key, limit, result)?;
             }
             None => {
                 let iter = self.db.iterator(rocksdb::IteratorMode::From(
@@ -637,7 +702,7 @@ impl Storage {
                     rocksdb::Direction::Forward,
                 ));
 
-                self.collect_entries(iter, key, result)?;
+                self.collect_entries(iter, key, limit, result)?;
             }
         };
 
@@ -648,6 +713,7 @@ impl Storage {
         &self,
         mut iter: I,
         prefix: &str,
+        limit: Option<usize>,
         result: &mut Vec<(String, String)>,
     ) -> Result<(), StorageError>
     where
@@ -665,6 +731,11 @@ impl Storage {
             };
             let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
             result.push((k, v));
+            if let Some(l) = limit {
+                if result.len() >= l {
+                    break;
+                }
+            }
         }
         Ok(())
     }
@@ -1056,6 +1127,86 @@ mod tests {
         let mut values: Vec<String> = store.partial_get("item", None)?;
         values.sort();
         assert_eq!(values, vec!["value1".to_string(), "value2".to_string()]);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial_compare_first returns the entry with the smallest matching key, or None.
+    #[test]
+    fn test_partial_compare_first_returns_smallest_match() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.write("test2", "test_value2", None)?;
+        store.write("test1", "test_value1", None)?;
+        store.write("test3", "test_value3", None)?;
+
+        let result = store.partial_compare_first("test", None)?;
+        assert_eq!(
+            result,
+            Some(("test1".to_string(), "test_value1".to_string()))
+        );
+
+        assert_eq!(store.partial_compare_first("missing", None)?, None);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial_compare_keys_first returns the smallest matching key, or None.
+    #[test]
+    fn test_partial_compare_keys_first_returns_smallest_match() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.write("test2", "test_value2", None)?;
+        store.write("test1", "test_value1", None)?;
+        store.write("tes4", "test_value4", None)?; // outside the prefix
+
+        let result = store.partial_compare_keys_first("test", None)?;
+        assert_eq!(result, Some("test1".to_string()));
+
+        assert_eq!(store.partial_compare_keys_first("missing", None)?, None);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial_get_first deserializes the value of the smallest matching key.
+    #[test]
+    fn test_partial_get_first_deserializes_value() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.set("item2", "value2".to_string(), None)?;
+        store.set("item1", "value1".to_string(), None)?;
+        store.set("other", "value3".to_string(), None)?; // outside the prefix
+
+        let value = store.partial_get_first::<String>("item", None)?;
+        assert_eq!(value, Some("value1".to_string()));
+
+        assert_eq!(store.partial_get_first::<String>("missing", None)?, None);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test the first-match search reads through the global transaction when given no transaction id.
+    #[test]
+    fn test_partial_compare_first_uses_global_transaction() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.begin_global_transaction()?;
+        // set routes to the global transaction when given no transaction id.
+        store.set("test1", "test_value1".to_string(), None)?;
+
+        // Staged in the global transaction, so only a read that goes through it can see this.
+        assert_eq!(
+            store.partial_get_first::<String>("test", None)?,
+            Some("test_value1".to_string())
+        );
+        assert_eq!(
+            store.partial_compare_keys_first("test", None)?,
+            Some("test1".to_string())
+        );
+
+        store.rollback_global_transaction()?;
+        assert_eq!(store.partial_compare_first("test", None)?, None);
+        assert_eq!(store.partial_compare_keys_first("test", None)?, None);
 
         Storage::delete_db_files(store)?;
         Ok(())
