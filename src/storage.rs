@@ -565,7 +565,7 @@ impl Storage {
                     .get(&tx_id)
                     .ok_or(StorageError::NotFound("Transaction".to_string()))?;
 
-                let mut iter = match key {
+                let iter = match key {
                     Some(k) => tx.iterator(rocksdb::IteratorMode::From(
                         k.as_bytes(),
                         rocksdb::Direction::Forward,
@@ -573,23 +573,10 @@ impl Storage {
                     None => tx.iterator(rocksdb::IteratorMode::Start),
                 };
 
-                while let Some(Ok((k, _))) = iter.next() {
-                    let k =
-                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-
-                    if let Some(prefix) = key {
-                        if k.starts_with(prefix) {
-                            result.push(k);
-                        } else {
-                            break;
-                        }
-                    } else {
-                        result.push(k);
-                    }
-                }
+                self.collect_keys(iter, key, result)?;
             }
             None => {
-                let mut iter = match key {
+                let iter = match key {
                     Some(k) => self.db.iterator(rocksdb::IteratorMode::From(
                         k.as_bytes(),
                         rocksdb::Direction::Forward,
@@ -597,22 +584,31 @@ impl Storage {
                     None => self.db.iterator(rocksdb::IteratorMode::Start),
                 };
 
-                while let Some(Ok((k, _))) = iter.next() {
-                    let k =
-                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    if let Some(prefix) = key {
-                        if k.starts_with(prefix) {
-                            result.push(k);
-                        } else {
-                            break;
-                        }
-                    } else {
-                        result.push(k);
-                    }
-                }
+                self.collect_keys(iter, key, result)?;
             }
         };
 
+        Ok(())
+    }
+
+    fn collect_keys<I>(
+        &self,
+        mut iter: I,
+        key: Option<&str>,
+        result: &mut Vec<String>,
+    ) -> Result<(), StorageError>
+    where
+        I: Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>>,
+    {
+        while let Some(Ok((k, _))) = iter.next() {
+            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            if let Some(prefix) = key {
+                if !k.starts_with(prefix) {
+                    break;
+                }
+            }
+            result.push(k);
+        }
         Ok(())
     }
 
@@ -628,49 +624,48 @@ impl Storage {
                 let tx = map
                     .get(&tx_id)
                     .ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                let mut iter = tx.iterator(rocksdb::IteratorMode::From(
+                let iter = tx.iterator(rocksdb::IteratorMode::From(
                     key.as_bytes(),
                     rocksdb::Direction::Forward,
                 ));
 
-                while let Some(Ok((k, v))) = iter.next() {
-                    let k =
-                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    if !k.starts_with(key) {
-                        break;
-                    }
-                    let v = if self.password.is_some() {
-                        self.decrypt_data(v.to_vec())?
-                    } else {
-                        v.to_vec()
-                    };
-                    let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
-                    result.push((k, v));
-                }
+                self.collect_entries(iter, key, result)?;
             }
             None => {
-                let mut iter = self.db.iterator(rocksdb::IteratorMode::From(
+                let iter = self.db.iterator(rocksdb::IteratorMode::From(
                     key.as_bytes(),
                     rocksdb::Direction::Forward,
                 ));
 
-                while let Some(Ok((k, v))) = iter.next() {
-                    let k =
-                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    if !k.starts_with(key) {
-                        break;
-                    }
-                    let v = if self.password.is_some() {
-                        self.decrypt_data(v.to_vec())?
-                    } else {
-                        v.to_vec()
-                    };
-                    let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
-                    result.push((k, v));
-                }
+                self.collect_entries(iter, key, result)?;
             }
         };
 
+        Ok(())
+    }
+
+    fn collect_entries<I>(
+        &self,
+        mut iter: I,
+        prefix: &str,
+        result: &mut Vec<(String, String)>,
+    ) -> Result<(), StorageError>
+    where
+        I: Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>>,
+    {
+        while let Some(Ok((k, v))) = iter.next() {
+            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            if !k.starts_with(prefix) {
+                break;
+            }
+            let v = if self.password.is_some() {
+                self.decrypt_data(v.to_vec())?
+            } else {
+                v.to_vec()
+            };
+            let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
+            result.push((k, v));
+        }
         Ok(())
     }
 
