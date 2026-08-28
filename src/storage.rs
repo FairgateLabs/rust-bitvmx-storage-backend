@@ -457,7 +457,16 @@ impl Storage {
     }
 
     pub fn keys(&self, transaction_id: Option<Uuid>) -> Result<Vec<String>, StorageError> {
-        self.partial_compare_keys_limited(None, None, transaction_id)
+        let mut result = Vec::new();
+
+        self.retrieve_partial_keys(
+            None,
+            None,
+            &mut result,
+            self.effective_transaction_id(transaction_id),
+        )?;
+
+        Ok(result)
     }
 
     pub fn partial_compare_keys(
@@ -465,32 +474,20 @@ impl Storage {
         key: &str,
         transaction_id: Option<Uuid>,
     ) -> Result<Vec<String>, StorageError> {
-        self.partial_compare_keys_limited(Some(key), None, transaction_id)
+        self.partial_compare_keys_limited(key, None, transaction_id)
     }
 
-    /// Returns the lexicographically smallest matching key, `None` if nothing matches the prefix.
-    pub fn partial_compare_keys_first(
+    /// Prefix scan over keys, stopping after `limit` matches. `None` scans the whole range.
+    pub fn partial_compare_keys_limited(
         &self,
         key: &str,
-        transaction_id: Option<Uuid>,
-    ) -> Result<Option<String>, StorageError> {
-        let res = self
-            .partial_compare_keys_limited(Some(key), Some(1), transaction_id)?
-            .into_iter()
-            .next();
-        Ok(res)
-    }
-
-    fn partial_compare_keys_limited(
-        &self,
-        key: Option<&str>,
         limit: Option<usize>,
         transaction_id: Option<Uuid>,
     ) -> Result<Vec<String>, StorageError> {
         let mut result = Vec::new();
 
         self.retrieve_partial_keys(
-            key,
+            Some(key),
             limit,
             &mut result,
             self.effective_transaction_id(transaction_id),
@@ -507,20 +504,8 @@ impl Storage {
         self.partial_compare_limited(key, None, transaction_id)
     }
 
-    /// Returns the matching entry with the lexicographically smallest key, `None` if nothing matches the prefix.
-    pub fn partial_compare_first(
-        &self,
-        key: &str,
-        transaction_id: Option<Uuid>,
-    ) -> Result<Option<(String, String)>, StorageError> {
-        let res = self
-            .partial_compare_limited(key, Some(1), transaction_id)?
-            .into_iter()
-            .next();
-        Ok(res)
-    }
-
-    fn partial_compare_limited(
+    /// Prefix scan stopping after `limit` entries. `None` scans the whole range.
+    pub fn partial_compare_limited(
         &self,
         key: &str,
         limit: Option<usize>,
@@ -547,33 +532,26 @@ impl Storage {
     where
         V: DeserializeOwned,
     {
-        let entries = self.partial_compare(key, transaction_id)?;
+        self.partial_get_limited(key, None, transaction_id)
+    }
+
+    /// The typed analog of `partial_compare_limited`.
+    pub fn partial_get_limited<V>(
+        &self,
+        key: &str,
+        limit: Option<usize>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<V>, StorageError>
+    where
+        V: DeserializeOwned,
+    {
+        let entries = self.partial_compare_limited(key, limit, transaction_id)?;
         let mut values = Vec::with_capacity(entries.len());
         for (_, value) in entries {
             let value = serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
             values.push(value);
         }
         Ok(values)
-    }
-
-    /// Prefix scan that deserializes the value of the lexicographically smallest key into `V`. The typed analog of `partial_compare_first`.
-    /// `None` if nothing matches the prefix.
-    pub fn partial_get_first<V>(
-        &self,
-        key: &str,
-        transaction_id: Option<Uuid>,
-    ) -> Result<Option<V>, StorageError>
-    where
-        V: DeserializeOwned,
-    {
-        match self.partial_compare_first(key, transaction_id)? {
-            Some((_, entry)) => {
-                let value =
-                    serde_json::from_str(&entry).map_err(|_| StorageError::ConversionError)?;
-                Ok(Some(value))
-            }
-            None => Ok(None),
-        }
     }
 
     fn retrieve_partial_keys(
@@ -626,6 +604,10 @@ impl Storage {
     where
         I: Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>>,
     {
+        if limit == Some(0) {
+            return Ok(());
+        }
+
         while let Some(Ok((k, _))) = iter.next() {
             let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
             if let Some(prefix) = key {
@@ -686,6 +668,10 @@ impl Storage {
     where
         I: Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>>,
     {
+        if limit == Some(0) {
+            return Ok(());
+        }
+
         while let Some(Ok((k, v))) = iter.next() {
             let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
             if !k.starts_with(prefix) {
@@ -1069,81 +1055,112 @@ mod tests {
         Ok(())
     }
 
-    // Test partial_compare_first returns the entry with the smallest matching key, or None.
+    // Test partial_compare_limited returns at most `limit` entries, smallest keys first.
     #[test]
-    fn test_partial_compare_first_returns_smallest_match() -> Result<(), StorageError> {
+    fn test_partial_compare_limited_stops_at_the_limit() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.write("test2", "test_value2", None)?;
         store.write("test1", "test_value1", None)?;
         store.write("test3", "test_value3", None)?;
 
-        let result = store.partial_compare_first("test", None)?;
         assert_eq!(
-            result,
-            Some(("test1".to_string(), "test_value1".to_string()))
+            store.partial_compare_limited("test", Some(1), None)?,
+            vec![("test1".to_string(), "test_value1".to_string())]
         );
-
-        assert_eq!(store.partial_compare_first("missing", None)?, None);
+        assert_eq!(
+            store.partial_compare_limited("test", Some(2), None)?,
+            vec![
+                ("test1".to_string(), "test_value1".to_string()),
+                ("test2".to_string(), "test_value2".to_string())
+            ]
+        );
+        // A limit larger than the matching range returns the whole range.
+        assert_eq!(
+            store.partial_compare_limited("test", Some(10), None)?.len(),
+            3
+        );
+        assert!(store
+            .partial_compare_limited("test", Some(0), None)?
+            .is_empty());
+        assert!(store
+            .partial_compare_limited("missing", Some(1), None)?
+            .is_empty());
 
         Storage::delete_db_files(store)?;
         Ok(())
     }
 
-    // Test partial_compare_keys_first returns the smallest matching key, or None.
+    // Test partial_compare_keys_limited returns at most `limit` keys, smallest first.
     #[test]
-    fn test_partial_compare_keys_first_returns_smallest_match() -> Result<(), StorageError> {
+    fn test_partial_compare_keys_limited_stops_at_the_limit() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.write("test2", "test_value2", None)?;
         store.write("test1", "test_value1", None)?;
         store.write("tes4", "test_value4", None)?; // outside the prefix
 
-        let result = store.partial_compare_keys_first("test", None)?;
-        assert_eq!(result, Some("test1".to_string()));
-
-        assert_eq!(store.partial_compare_keys_first("missing", None)?, None);
+        assert_eq!(
+            store.partial_compare_keys_limited("test", Some(1), None)?,
+            vec!["test1".to_string()]
+        );
+        assert_eq!(
+            store.partial_compare_keys_limited("test", None, None)?,
+            vec!["test1".to_string(), "test2".to_string()]
+        );
+        assert!(store
+            .partial_compare_keys_limited("test", Some(0), None)?
+            .is_empty());
+        assert!(store
+            .partial_compare_keys_limited("missing", Some(1), None)?
+            .is_empty());
 
         Storage::delete_db_files(store)?;
         Ok(())
     }
 
-    // Test partial_get_first deserializes the value of the smallest matching key.
+    // Test partial_get_limited deserializes at most `limit` values.
     #[test]
-    fn test_partial_get_first_deserializes_value() -> Result<(), StorageError> {
+    fn test_partial_get_limited_deserializes_values() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.set("item2", "value2".to_string(), None)?;
         store.set("item1", "value1".to_string(), None)?;
         store.set("other", "value3".to_string(), None)?; // outside the prefix
 
-        let value = store.partial_get_first::<String>("item", None)?;
-        assert_eq!(value, Some("value1".to_string()));
+        let values: Vec<String> = store.partial_get_limited("item", Some(1), None)?;
+        assert_eq!(values, vec!["value1".to_string()]);
 
-        assert_eq!(store.partial_get_first::<String>("missing", None)?, None);
+        let values: Vec<String> = store.partial_get_limited("item", None, None)?;
+        assert_eq!(values, vec!["value1".to_string(), "value2".to_string()]);
+
+        let values: Vec<String> = store.partial_get_limited("missing", Some(1), None)?;
+        assert!(values.is_empty());
 
         Storage::delete_db_files(store)?;
         Ok(())
     }
 
-    // Test the first-match search reads through the global transaction when given no transaction id.
+    // Test the limited scans read through the global transaction when given no transaction id.
     #[test]
-    fn test_partial_compare_first_uses_global_transaction() -> Result<(), StorageError> {
+    fn test_partial_compare_limited_uses_global_transaction() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.begin_global_transaction()?;
         // set routes to the global transaction when given no transaction id.
         store.set("test1", "test_value1".to_string(), None)?;
 
         // Staged in the global transaction, so only a read that goes through it can see this.
+        let values: Vec<String> = store.partial_get_limited("test", Some(1), None)?;
+        assert_eq!(values, vec!["test_value1".to_string()]);
         assert_eq!(
-            store.partial_get_first::<String>("test", None)?,
-            Some("test_value1".to_string())
-        );
-        assert_eq!(
-            store.partial_compare_keys_first("test", None)?,
-            Some("test1".to_string())
+            store.partial_compare_keys_limited("test", Some(1), None)?,
+            vec!["test1".to_string()]
         );
 
         store.rollback_global_transaction()?;
-        assert_eq!(store.partial_compare_first("test", None)?, None);
-        assert_eq!(store.partial_compare_keys_first("test", None)?, None);
+        assert!(store
+            .partial_compare_limited("test", Some(1), None)?
+            .is_empty());
+        assert!(store
+            .partial_compare_keys_limited("test", Some(1), None)?
+            .is_empty());
 
         Storage::delete_db_files(store)?;
         Ok(())

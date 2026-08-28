@@ -52,11 +52,11 @@ The `Storage` struct in `src/storage.rs` provides a comprehensive set of methods
 
 - **partial_get**: Retrieves the values whose keys start with the specified prefix, deserializing each one into the specified type.
 
-- **partial_compare_keys_first**: Retrieves the first key that starts with the specified prefix, stopping the scan at the first match.
+- **partial_compare_keys_limited**: Retrieves at most `limit` keys that start with the specified prefix, stopping the scan once they have been collected.
 
-- **partial_compare_first**: Retrieves the first key-value pair whose key starts with the specified prefix, stopping the scan at the first match.
+- **partial_compare_limited**: Retrieves at most `limit` key-value pairs whose keys start with the specified prefix, stopping the scan once they have been collected.
 
-- **partial_get_first**: Retrieves the first value whose key starts with the specified prefix, deserializing it into the specified type.
+- **partial_get_limited**: Retrieves at most `limit` values whose keys start with the specified prefix, deserializing each one into the specified type.
 
 - **begin_transaction**: Begins a new transaction and returns its ID.
 
@@ -168,14 +168,14 @@ To use the `Storage` struct for managing a key-value store, follow these steps:
      let values: Vec<MyType> = storage.partial_get("prefix")?;
      ```
 
-     The `_first` variants stop at the first match instead of collecting every
-     one, and return `None` when nothing matches. Matches are visited in key
-     order, so "first" means the smallest matching key, not the oldest entry.
+     The `_limited` variants stop once `limit` matches have been collected
+     instead of scanning the whole range. Matches are visited in key order, so a
+     limit of `Some(1)` yields the smallest matching key, not the oldest entry.
 
      ```rust
-     let first_key = storage.partial_compare_keys_first("prefix")?;
-     let first_pair = storage.partial_compare_first("prefix")?;
-     let first_value: Option<MyType> = storage.partial_get_first("prefix")?;
+     let first_key: Vec<String> = storage.partial_compare_keys_limited("prefix", Some(1))?;
+     let first_pair = storage.partial_compare_limited("prefix", Some(1))?;
+     let first_value: Vec<MyType> = storage.partial_get_limited("prefix", Some(1))?;
      ```
 
    - **Open Existing Storage**:
