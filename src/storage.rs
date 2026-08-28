@@ -439,7 +439,7 @@ impl Storage {
     }
 
     pub fn is_empty(&self, transaction_id: Option<Uuid>) -> Result<bool, StorageError> {
-        match transaction_id {
+        match self.effective_transaction_id(transaction_id) {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
                 let tx = map
@@ -448,39 +448,24 @@ impl Storage {
                 let result = tx.iterator(rocksdb::IteratorMode::Start).next().is_none();
                 Ok(result)
             }
-            None => {
-                if self.global_transaction_is_active() {
-                    let map = self.transactions.borrow();
-                    let tx = map
-                        .get(&GLOBAL_TRANSACTION_ID)
-                        .ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                    let result = tx.iterator(rocksdb::IteratorMode::Start).next().is_none();
-                    Ok(result)
-                } else {
-                    Ok(self
-                        .db
-                        .iterator(rocksdb::IteratorMode::Start)
-                        .next()
-                        .is_none())
-                }
-            }
+            None => Ok(self
+                .db
+                .iterator(rocksdb::IteratorMode::Start)
+                .next()
+                .is_none()),
         }
     }
 
     pub fn keys(&self, transaction_id: Option<Uuid>) -> Result<Vec<String>, StorageError> {
         let mut result = Vec::new();
-        match transaction_id {
-            Some(tx_id) => {
-                self.retrieve_partial_keys(None, &mut result, Some(tx_id))?;
-            }
-            None => {
-                if self.global_transaction_is_active() {
-                    self.retrieve_partial_keys(None, &mut result, Some(GLOBAL_TRANSACTION_ID))?;
-                } else {
-                    self.retrieve_partial_keys(None, &mut result, None)?;
-                }
-            }
-        };
+
+        self.retrieve_partial_keys(
+            None,
+            None,
+            &mut result,
+            self.effective_transaction_id(transaction_id),
+        )?;
+
         Ok(result)
     }
 
@@ -489,24 +474,24 @@ impl Storage {
         key: &str,
         transaction_id: Option<Uuid>,
     ) -> Result<Vec<String>, StorageError> {
+        self.partial_compare_keys_limited(key, None, transaction_id)
+    }
+
+    /// Prefix scan over keys, stopping after `limit` matches. `None` scans the whole range.
+    pub fn partial_compare_keys_limited(
+        &self,
+        key: &str,
+        limit: Option<usize>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<String>, StorageError> {
         let mut result = Vec::new();
 
-        match transaction_id {
-            Some(tx_id) => {
-                self.retrieve_partial_keys(Some(key), &mut result, Some(tx_id))?;
-            }
-            None => {
-                if self.global_transaction_is_active() {
-                    self.retrieve_partial_keys(
-                        Some(key),
-                        &mut result,
-                        Some(GLOBAL_TRANSACTION_ID),
-                    )?;
-                } else {
-                    self.retrieve_partial_keys(Some(key), &mut result, None)?;
-                }
-            }
-        };
+        self.retrieve_partial_keys(
+            Some(key),
+            limit,
+            &mut result,
+            self.effective_transaction_id(transaction_id),
+        )?;
 
         Ok(result)
     }
@@ -516,20 +501,24 @@ impl Storage {
         key: &str,
         transaction_id: Option<Uuid>,
     ) -> Result<Vec<(String, String)>, StorageError> {
+        self.partial_compare_limited(key, None, transaction_id)
+    }
+
+    /// Prefix scan stopping after `limit` entries. `None` scans the whole range.
+    pub fn partial_compare_limited(
+        &self,
+        key: &str,
+        limit: Option<usize>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<(String, String)>, StorageError> {
         let mut result = Vec::new();
 
-        match transaction_id {
-            Some(tx_id) => {
-                self.retrieve_partial_entries(key, &mut result, Some(tx_id))?;
-            }
-            None => {
-                if self.global_transaction_is_active() {
-                    self.retrieve_partial_entries(key, &mut result, Some(GLOBAL_TRANSACTION_ID))?;
-                } else {
-                    self.retrieve_partial_entries(key, &mut result, None)?;
-                }
-            }
-        };
+        self.retrieve_partial_entries(
+            key,
+            limit,
+            &mut result,
+            self.effective_transaction_id(transaction_id),
+        )?;
 
         Ok(result)
     }
@@ -543,7 +532,20 @@ impl Storage {
     where
         V: DeserializeOwned,
     {
-        let entries = self.partial_compare(key, transaction_id)?;
+        self.partial_get_limited(key, None, transaction_id)
+    }
+
+    /// The typed analog of `partial_compare_limited`.
+    pub fn partial_get_limited<V>(
+        &self,
+        key: &str,
+        limit: Option<usize>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Vec<V>, StorageError>
+    where
+        V: DeserializeOwned,
+    {
+        let entries = self.partial_compare_limited(key, limit, transaction_id)?;
         let mut values = Vec::with_capacity(entries.len());
         for (_, value) in entries {
             let value = serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
@@ -555,6 +557,7 @@ impl Storage {
     fn retrieve_partial_keys(
         &self,
         key: Option<&str>,
+        limit: Option<usize>,
         result: &mut Vec<String>,
         transaction_id: Option<Uuid>,
     ) -> Result<(), StorageError> {
@@ -565,7 +568,7 @@ impl Storage {
                     .get(&tx_id)
                     .ok_or(StorageError::NotFound("Transaction".to_string()))?;
 
-                let mut iter = match key {
+                let iter = match key {
                     Some(k) => tx.iterator(rocksdb::IteratorMode::From(
                         k.as_bytes(),
                         rocksdb::Direction::Forward,
@@ -573,23 +576,10 @@ impl Storage {
                     None => tx.iterator(rocksdb::IteratorMode::Start),
                 };
 
-                while let Some(Ok((k, _))) = iter.next() {
-                    let k =
-                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-
-                    if let Some(prefix) = key {
-                        if k.starts_with(prefix) {
-                            result.push(k);
-                        } else {
-                            break;
-                        }
-                    } else {
-                        result.push(k);
-                    }
-                }
+                self.collect_keys(iter, key, limit, result)?;
             }
             None => {
-                let mut iter = match key {
+                let iter = match key {
                     Some(k) => self.db.iterator(rocksdb::IteratorMode::From(
                         k.as_bytes(),
                         rocksdb::Direction::Forward,
@@ -597,28 +587,48 @@ impl Storage {
                     None => self.db.iterator(rocksdb::IteratorMode::Start),
                 };
 
-                while let Some(Ok((k, _))) = iter.next() {
-                    let k =
-                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    if let Some(prefix) = key {
-                        if k.starts_with(prefix) {
-                            result.push(k);
-                        } else {
-                            break;
-                        }
-                    } else {
-                        result.push(k);
-                    }
-                }
+                self.collect_keys(iter, key, limit, result)?;
             }
         };
 
         Ok(())
     }
 
+    fn collect_keys<I>(
+        &self,
+        mut iter: I,
+        key: Option<&str>,
+        limit: Option<usize>,
+        result: &mut Vec<String>,
+    ) -> Result<(), StorageError>
+    where
+        I: Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>>,
+    {
+        if limit == Some(0) {
+            return Ok(());
+        }
+
+        while let Some(Ok((k, _))) = iter.next() {
+            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            if let Some(prefix) = key {
+                if !k.starts_with(prefix) {
+                    break;
+                }
+            }
+            result.push(k);
+            if let Some(l) = limit {
+                if result.len() >= l {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn retrieve_partial_entries(
         &self,
         key: &str,
+        limit: Option<usize>,
         result: &mut Vec<(String, String)>,
         transaction_id: Option<Uuid>,
     ) -> Result<(), StorageError> {
@@ -628,56 +638,63 @@ impl Storage {
                 let tx = map
                     .get(&tx_id)
                     .ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                let mut iter = tx.iterator(rocksdb::IteratorMode::From(
+                let iter = tx.iterator(rocksdb::IteratorMode::From(
                     key.as_bytes(),
                     rocksdb::Direction::Forward,
                 ));
 
-                while let Some(Ok((k, v))) = iter.next() {
-                    let k =
-                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    let v = if self.password.is_some() {
-                        self.decrypt_data(v.to_vec())?
-                    } else {
-                        v.to_vec()
-                    };
-                    let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
-                    if k.starts_with(key) {
-                        result.push((k, v));
-                    } else {
-                        break;
-                    }
-                }
+                self.collect_entries(iter, key, limit, result)?;
             }
             None => {
-                let mut iter = self.db.iterator(rocksdb::IteratorMode::From(
+                let iter = self.db.iterator(rocksdb::IteratorMode::From(
                     key.as_bytes(),
                     rocksdb::Direction::Forward,
                 ));
 
-                while let Some(Ok((k, v))) = iter.next() {
-                    let k =
-                        String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
-                    let v = if self.password.is_some() {
-                        self.decrypt_data(v.to_vec())?
-                    } else {
-                        v.to_vec()
-                    };
-                    let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
-                    if k.starts_with(key) {
-                        result.push((k, v));
-                    } else {
-                        break;
-                    }
-                }
+                self.collect_entries(iter, key, limit, result)?;
             }
         };
 
         Ok(())
     }
 
+    fn collect_entries<I>(
+        &self,
+        mut iter: I,
+        prefix: &str,
+        limit: Option<usize>,
+        result: &mut Vec<(String, String)>,
+    ) -> Result<(), StorageError>
+    where
+        I: Iterator<Item = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>>,
+    {
+        if limit == Some(0) {
+            return Ok(());
+        }
+
+        while let Some(Ok((k, v))) = iter.next() {
+            let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
+            if !k.starts_with(prefix) {
+                break;
+            }
+            let v = if self.password.is_some() {
+                self.decrypt_data(v.to_vec())?
+            } else {
+                v.to_vec()
+            };
+            let v = String::from_utf8(v).map_err(|_| StorageError::ConversionError)?;
+            result.push((k, v));
+            if let Some(l) = limit {
+                if result.len() >= l {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn has_key(&self, key: &str, transaction_id: Option<Uuid>) -> Result<bool, StorageError> {
-        let result = match transaction_id {
+        let result = match self.effective_transaction_id(transaction_id) {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
                 let tx = map
@@ -686,20 +703,10 @@ impl Storage {
                 tx.get(key.as_bytes())
                     .map_err(|_| StorageError::ReadError)?
             }
-            None => {
-                if self.global_transaction_is_active() {
-                    let map = self.transactions.borrow();
-                    let tx = map
-                        .get(&GLOBAL_TRANSACTION_ID)
-                        .ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                    tx.get(key.as_bytes())
-                        .map_err(|_| StorageError::ReadError)?
-                } else {
-                    self.db
-                        .get(key.as_bytes())
-                        .map_err(|_| StorageError::ReadError)?
-                }
-            }
+            None => self
+                .db
+                .get(key.as_bytes())
+                .map_err(|_| StorageError::ReadError)?,
         };
 
         Ok(result.is_some())
@@ -772,6 +779,13 @@ impl Storage {
             .contains_key(&GLOBAL_TRANSACTION_ID)
     }
 
+    fn effective_transaction_id(&self, transaction_id: Option<Uuid>) -> Option<Uuid> {
+        transaction_id.or_else(|| {
+            self.global_transaction_is_active()
+                .then_some(GLOBAL_TRANSACTION_ID)
+        })
+    }
+
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let key: &[u8; 32] = self
             .password
@@ -809,16 +823,7 @@ impl KeyValueStore for Storage {
         V: DeserializeOwned,
     {
         let key = key.as_ref();
-        let value = match transaction_id {
-            Some(id) => self.read(key, Some(id))?,
-            None => {
-                if self.global_transaction_is_active() {
-                    self.read(key, Some(GLOBAL_TRANSACTION_ID))?
-                } else {
-                    self.read(key, None)?
-                }
-            }
-        };
+        let value = self.read(key, self.effective_transaction_id(transaction_id))?;
 
         match value {
             Some(value) => {
@@ -838,16 +843,7 @@ impl KeyValueStore for Storage {
         let key = key.as_ref();
         let value = serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
 
-        match transaction_id {
-            Some(id) => self.write(key, &value, Some(id)),
-            None => {
-                if self.global_transaction_is_active() {
-                    return self.write(key, &value, Some(GLOBAL_TRANSACTION_ID));
-                } else {
-                    return self.write(key, &value, None);
-                }
-            }
-        }
+        self.write(key, &value, self.effective_transaction_id(transaction_id))
     }
 
     fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
@@ -856,16 +852,7 @@ impl KeyValueStore for Storage {
     {
         let key = key.as_ref();
 
-        match transaction_id {
-            Some(id) => self.delete(key, Some(id)),
-            None => {
-                if self.global_transaction_is_active() {
-                    return self.delete(key, Some(GLOBAL_TRANSACTION_ID));
-                } else {
-                    return self.delete(key, None);
-                }
-            }
-        }
+        self.delete(key, self.effective_transaction_id(transaction_id))
     }
 
     fn update<K, V>(
@@ -1039,6 +1026,19 @@ mod tests {
         Ok(())
     }
 
+    // Test partial prefix search on an encrypted store does not decrypt entries outside the prefix.
+    #[test]
+    fn test_partial_compare_encrypted_ignores_out_of_range_entries() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(true)?;
+        store.write("AAA", "test_value", None)?;
+
+        let result = store.partial_compare("AAA", None)?;
+        assert_eq!(result, vec![("AAA".to_string(), "test_value".to_string())]);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
     // Test partial_get deserializes each matching value into the requested type.
     #[test]
     fn test_partial_get_deserializes_values() -> Result<(), StorageError> {
@@ -1050,6 +1050,117 @@ mod tests {
         let mut values: Vec<String> = store.partial_get("item", None)?;
         values.sort();
         assert_eq!(values, vec!["value1".to_string(), "value2".to_string()]);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial_compare_limited returns at most `limit` entries, smallest keys first.
+    #[test]
+    fn test_partial_compare_limited_stops_at_the_limit() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.write("test2", "test_value2", None)?;
+        store.write("test1", "test_value1", None)?;
+        store.write("test3", "test_value3", None)?;
+
+        assert_eq!(
+            store.partial_compare_limited("test", Some(1), None)?,
+            vec![("test1".to_string(), "test_value1".to_string())]
+        );
+        assert_eq!(
+            store.partial_compare_limited("test", Some(2), None)?,
+            vec![
+                ("test1".to_string(), "test_value1".to_string()),
+                ("test2".to_string(), "test_value2".to_string())
+            ]
+        );
+        // A limit larger than the matching range returns the whole range.
+        assert_eq!(
+            store.partial_compare_limited("test", Some(10), None)?.len(),
+            3
+        );
+        assert!(store
+            .partial_compare_limited("test", Some(0), None)?
+            .is_empty());
+        assert!(store
+            .partial_compare_limited("missing", Some(1), None)?
+            .is_empty());
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial_compare_keys_limited returns at most `limit` keys, smallest first.
+    #[test]
+    fn test_partial_compare_keys_limited_stops_at_the_limit() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.write("test2", "test_value2", None)?;
+        store.write("test1", "test_value1", None)?;
+        store.write("tes4", "test_value4", None)?; // outside the prefix
+
+        assert_eq!(
+            store.partial_compare_keys_limited("test", Some(1), None)?,
+            vec!["test1".to_string()]
+        );
+        assert_eq!(
+            store.partial_compare_keys_limited("test", None, None)?,
+            vec!["test1".to_string(), "test2".to_string()]
+        );
+        assert!(store
+            .partial_compare_keys_limited("test", Some(0), None)?
+            .is_empty());
+        assert!(store
+            .partial_compare_keys_limited("missing", Some(1), None)?
+            .is_empty());
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial_get_limited deserializes at most `limit` values.
+    #[test]
+    fn test_partial_get_limited_deserializes_values() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.set("item2", "value2".to_string(), None)?;
+        store.set("item1", "value1".to_string(), None)?;
+        store.set("other", "value3".to_string(), None)?; // outside the prefix
+
+        let values: Vec<String> = store.partial_get_limited("item", Some(1), None)?;
+        assert_eq!(values, vec!["value1".to_string()]);
+
+        let values: Vec<String> = store.partial_get_limited("item", None, None)?;
+        assert_eq!(values, vec!["value1".to_string(), "value2".to_string()]);
+
+        let values: Vec<String> = store.partial_get_limited("missing", Some(1), None)?;
+        assert!(values.is_empty());
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test the limited scans read through the global transaction when given no transaction id.
+    #[test]
+    fn test_partial_compare_limited_uses_global_transaction() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.begin_global_transaction()?;
+        // set routes to the global transaction when given no transaction id.
+        store.set("test1", "test_value1".to_string(), None)?;
+
+        // Staged in the global transaction, so only a read that goes through it can see this.
+        let values: Vec<String> = store.partial_get_limited("test", Some(1), None)?;
+        assert_eq!(values, vec!["test_value1".to_string()]);
+        assert_eq!(
+            store.partial_compare_keys_limited("test", Some(1), None)?,
+            vec!["test1".to_string()]
+        );
+
+        store.rollback_global_transaction()?;
+        assert!(store
+            .partial_compare_limited("test", Some(1), None)?
+            .is_empty());
+        assert!(store
+            .partial_compare_keys_limited("test", Some(1), None)?
+            .is_empty());
 
         Storage::delete_db_files(store)?;
         Ok(())

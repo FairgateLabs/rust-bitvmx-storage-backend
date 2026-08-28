@@ -1,5 +1,5 @@
 # BitVMX Storage Backend
-A Rust library for managing storage for BitVMX 
+A Rust library for managing storage for BitVMX
 
 ## ⚠️ Disclaimer
 
@@ -50,6 +50,14 @@ The `Storage` struct in `src/storage.rs` provides a comprehensive set of methods
 
 - **partial_compare**: Retrieves key-value pairs where keys start with the specified prefix.
 
+- **partial_get**: Retrieves the values whose keys start with the specified prefix, deserializing each one into the specified type.
+
+- **partial_compare_keys_limited**: Retrieves at most `limit` keys that start with the specified prefix, stopping the scan once they have been collected.
+
+- **partial_compare_limited**: Retrieves at most `limit` key-value pairs whose keys start with the specified prefix, stopping the scan once they have been collected.
+
+- **partial_get_limited**: Retrieves at most `limit` values whose keys start with the specified prefix, deserializing each one into the specified type.
+
 - **begin_transaction**: Begins a new transaction and returns its ID.
 
 - **commit_transaction**: Commits the specified transaction.
@@ -66,7 +74,7 @@ The `Storage` struct in `src/storage.rs` provides a comprehensive set of methods
 
 To use the `Storage` struct for managing a key-value store, follow these steps:
 
-1. **Create a StorageConfig**: 
+1. **Create a StorageConfig**:
    Define the path for your database and specify whether encryption is needed.
 
    ```rust
@@ -82,6 +90,11 @@ To use the `Storage` struct for managing a key-value store, follow these steps:
 
 3. **Perform Operations**:
    Use the available methods to interact with the database.
+
+   Every operation takes a trailing `transaction_id: Option<Uuid>`. Pass `Some(id)`
+   from `begin_transaction()` to read and write inside that transaction, or `None`
+   to use whatever is ambient — the global transaction if one is open, and the
+   database directly otherwise. The examples below omit it for brevity.
 
    - **Write Data**:
      ```rust
@@ -152,6 +165,17 @@ To use the `Storage` struct for managing a key-value store, follow these steps:
      ```rust
      let keys_with_prefix = storage.partial_compare_keys("prefix")?;
      let key_value_pairs = storage.partial_compare("prefix")?;
+     let values: Vec<MyType> = storage.partial_get("prefix")?;
+     ```
+
+     The `_limited` variants stop once `limit` matches have been collected
+     instead of scanning the whole range. Matches are visited in key order, so a
+     limit of `Some(1)` yields the smallest matching key, not the oldest entry.
+
+     ```rust
+     let first_key: Vec<String> = storage.partial_compare_keys_limited("prefix", Some(1))?;
+     let first_pair = storage.partial_compare_limited("prefix", Some(1))?;
+     let first_value: Vec<MyType> = storage.partial_get_limited("prefix", Some(1))?;
      ```
 
    - **Open Existing Storage**:
@@ -179,7 +203,7 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 
 ## 🧩 Part of the BitVMX Ecosystem
 
-This repository is a component of the **BitVMX Ecosystem**, an open platform for disputable computation secured by Bitcoin.  
+This repository is a component of the **BitVMX Ecosystem**, an open platform for disputable computation secured by Bitcoin.
 You can find the index of all BitVMX open-source components at [**FairgateLabs/BitVMX**](https://github.com/FairgateLabs/BitVMX).
 
 ---
