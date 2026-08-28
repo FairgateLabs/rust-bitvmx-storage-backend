@@ -439,7 +439,7 @@ impl Storage {
     }
 
     pub fn is_empty(&self, transaction_id: Option<Uuid>) -> Result<bool, StorageError> {
-        match transaction_id {
+        match self.effective_transaction_id(transaction_id) {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
                 let tx = map
@@ -448,22 +448,11 @@ impl Storage {
                 let result = tx.iterator(rocksdb::IteratorMode::Start).next().is_none();
                 Ok(result)
             }
-            None => {
-                if self.global_transaction_is_active() {
-                    let map = self.transactions.borrow();
-                    let tx = map
-                        .get(&GLOBAL_TRANSACTION_ID)
-                        .ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                    let result = tx.iterator(rocksdb::IteratorMode::Start).next().is_none();
-                    Ok(result)
-                } else {
-                    Ok(self
-                        .db
-                        .iterator(rocksdb::IteratorMode::Start)
-                        .next()
-                        .is_none())
-                }
-            }
+            None => Ok(self
+                .db
+                .iterator(rocksdb::IteratorMode::Start)
+                .next()
+                .is_none()),
         }
     }
 
@@ -500,23 +489,12 @@ impl Storage {
     ) -> Result<Vec<String>, StorageError> {
         let mut result = Vec::new();
 
-        match transaction_id {
-            Some(tx_id) => {
-                self.retrieve_partial_keys(key, limit, &mut result, Some(tx_id))?;
-            }
-            None => {
-                if self.global_transaction_is_active() {
-                    self.retrieve_partial_keys(
-                        key,
-                        limit,
-                        &mut result,
-                        Some(GLOBAL_TRANSACTION_ID),
-                    )?;
-                } else {
-                    self.retrieve_partial_keys(key, limit, &mut result, None)?;
-                }
-            }
-        };
+        self.retrieve_partial_keys(
+            key,
+            limit,
+            &mut result,
+            self.effective_transaction_id(transaction_id),
+        )?;
 
         Ok(result)
     }
@@ -550,23 +528,12 @@ impl Storage {
     ) -> Result<Vec<(String, String)>, StorageError> {
         let mut result = Vec::new();
 
-        match transaction_id {
-            Some(tx_id) => {
-                self.retrieve_partial_entries(key, limit, &mut result, Some(tx_id))?;
-            }
-            None => {
-                if self.global_transaction_is_active() {
-                    self.retrieve_partial_entries(
-                        key,
-                        limit,
-                        &mut result,
-                        Some(GLOBAL_TRANSACTION_ID),
-                    )?;
-                } else {
-                    self.retrieve_partial_entries(key, limit, &mut result, None)?;
-                }
-            }
-        };
+        self.retrieve_partial_entries(
+            key,
+            limit,
+            &mut result,
+            self.effective_transaction_id(transaction_id),
+        )?;
 
         Ok(result)
     }
@@ -741,7 +708,7 @@ impl Storage {
     }
 
     pub fn has_key(&self, key: &str, transaction_id: Option<Uuid>) -> Result<bool, StorageError> {
-        let result = match transaction_id {
+        let result = match self.effective_transaction_id(transaction_id) {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
                 let tx = map
@@ -750,20 +717,10 @@ impl Storage {
                 tx.get(key.as_bytes())
                     .map_err(|_| StorageError::ReadError)?
             }
-            None => {
-                if self.global_transaction_is_active() {
-                    let map = self.transactions.borrow();
-                    let tx = map
-                        .get(&GLOBAL_TRANSACTION_ID)
-                        .ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                    tx.get(key.as_bytes())
-                        .map_err(|_| StorageError::ReadError)?
-                } else {
-                    self.db
-                        .get(key.as_bytes())
-                        .map_err(|_| StorageError::ReadError)?
-                }
-            }
+            None => self
+                .db
+                .get(key.as_bytes())
+                .map_err(|_| StorageError::ReadError)?,
         };
 
         Ok(result.is_some())
@@ -836,6 +793,13 @@ impl Storage {
             .contains_key(&GLOBAL_TRANSACTION_ID)
     }
 
+    fn effective_transaction_id(&self, transaction_id: Option<Uuid>) -> Option<Uuid> {
+        transaction_id.or_else(|| {
+            self.global_transaction_is_active()
+                .then_some(GLOBAL_TRANSACTION_ID)
+        })
+    }
+
     fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
         let key: &[u8; 32] = self
             .password
@@ -873,16 +837,7 @@ impl KeyValueStore for Storage {
         V: DeserializeOwned,
     {
         let key = key.as_ref();
-        let value = match transaction_id {
-            Some(id) => self.read(key, Some(id))?,
-            None => {
-                if self.global_transaction_is_active() {
-                    self.read(key, Some(GLOBAL_TRANSACTION_ID))?
-                } else {
-                    self.read(key, None)?
-                }
-            }
-        };
+        let value = self.read(key, self.effective_transaction_id(transaction_id))?;
 
         match value {
             Some(value) => {
@@ -902,16 +857,7 @@ impl KeyValueStore for Storage {
         let key = key.as_ref();
         let value = serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
 
-        match transaction_id {
-            Some(id) => self.write(key, &value, Some(id)),
-            None => {
-                if self.global_transaction_is_active() {
-                    return self.write(key, &value, Some(GLOBAL_TRANSACTION_ID));
-                } else {
-                    return self.write(key, &value, None);
-                }
-            }
-        }
+        self.write(key, &value, self.effective_transaction_id(transaction_id))
     }
 
     fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
@@ -920,16 +866,7 @@ impl KeyValueStore for Storage {
     {
         let key = key.as_ref();
 
-        match transaction_id {
-            Some(id) => self.delete(key, Some(id)),
-            None => {
-                if self.global_transaction_is_active() {
-                    return self.delete(key, Some(GLOBAL_TRANSACTION_ID));
-                } else {
-                    return self.delete(key, None);
-                }
-            }
-        }
+        self.delete(key, self.effective_transaction_id(transaction_id))
     }
 
     fn update<K, V>(
