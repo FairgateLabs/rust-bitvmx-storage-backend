@@ -244,7 +244,7 @@ pub fn run_tui(storage: &Storage) -> io::Result<()> {
         Err(e) => {
             disable_raw_mode()?;
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-            return Err(io::Error::new(io::ErrorKind::Other, e));
+            return Err(io::Error::other(e));
         }
     };
 
