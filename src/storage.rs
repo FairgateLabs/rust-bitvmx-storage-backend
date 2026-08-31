@@ -119,7 +119,6 @@ impl Storage {
                     let mut entry_cursor = Cursor::new(encrypted_dek);
 
                     let cocoon = Cocoon::new(password.expose_secret().as_bytes());
-                    
 
                     cocoon
                         .parse(&mut entry_cursor)
@@ -173,7 +172,6 @@ impl Storage {
                 let mut entry_cursor = Cursor::new(encrypted_dek);
 
                 let cocoon = Cocoon::new(old_password.expose_secret().as_bytes());
-                
 
                 cocoon
                     .parse(&mut entry_cursor)
@@ -898,7 +896,6 @@ impl KeyValueStore for Storage {
 }
 
 fn create_options() -> rocksdb::Options {
-    
     rocksdb::Options::default()
 }
 
