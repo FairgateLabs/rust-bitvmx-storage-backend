@@ -119,11 +119,11 @@ impl Storage {
                     let mut entry_cursor = Cursor::new(encrypted_dek);
 
                     let cocoon = Cocoon::new(password.expose_secret().as_bytes());
-                    let dek = cocoon
-                        .parse(&mut entry_cursor)
-                        .map_err(|_| StorageError::WrongPassword)?;
+                    
 
-                    dek
+                    cocoon
+                        .parse(&mut entry_cursor)
+                        .map_err(|_| StorageError::WrongPassword)?
                 }
                 None => {
                     let mut bytes = [0u8; 32];
@@ -161,7 +161,7 @@ impl Storage {
     ) -> Result<(), StorageError> {
         match &self.password {
             Some(_) => {
-                if !self.password_policy.is_valid(&new_password.expose_secret()) {
+                if !self.password_policy.is_valid(new_password.expose_secret()) {
                     return Err(StorageError::WeakPassword(self.password_policy.clone()));
                 }
             }
@@ -173,11 +173,11 @@ impl Storage {
                 let mut entry_cursor = Cursor::new(encrypted_dek);
 
                 let cocoon = Cocoon::new(old_password.expose_secret().as_bytes());
-                let dek = cocoon
-                    .parse(&mut entry_cursor)
-                    .map_err(|_| StorageError::WrongPassword)?;
+                
 
-                dek
+                cocoon
+                    .parse(&mut entry_cursor)
+                    .map_err(|_| StorageError::WrongPassword)?
             }
             None => return Err(StorageError::NotFound("DEK".to_string())),
         };
@@ -201,7 +201,7 @@ impl Storage {
         old_password: Secret<String>,
         new_password: Secret<String>,
     ) -> Result<(), StorageError> {
-        if !self.password_policy.is_valid(&new_password.expose_secret()) {
+        if !self.password_policy.is_valid(new_password.expose_secret()) {
             return Err(StorageError::WeakPassword(self.password_policy.clone()));
         }
 
@@ -289,7 +289,7 @@ impl Storage {
         dek_path: P,
         password: Secret<String>,
     ) -> Result<(), StorageError> {
-        if !self.password_policy.is_valid(&password.expose_secret()) {
+        if !self.password_policy.is_valid(password.expose_secret()) {
             return Err(StorageError::WeakPassword(self.password_policy.clone()));
         }
 
@@ -742,7 +742,8 @@ impl Storage {
 
     pub fn begin_global_transaction(&self) -> Result<(), StorageError> {
         if !self.global_transaction_is_active() {
-            Ok(self.create_transaction(GLOBAL_TRANSACTION_ID))
+            self.create_transaction(GLOBAL_TRANSACTION_ID);
+            Ok(())
         } else {
             Err(StorageError::GlobalTransactionAlreadyActiveError)
         }
@@ -897,8 +898,8 @@ impl KeyValueStore for Storage {
 }
 
 fn create_options() -> rocksdb::Options {
-    let options = rocksdb::Options::default();
-    options
+    
+    rocksdb::Options::default()
 }
 
 #[cfg(test)]
