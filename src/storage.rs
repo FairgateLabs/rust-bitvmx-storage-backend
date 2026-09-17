@@ -1,6 +1,7 @@
 use crate::{
     backup_io::{BackupFileReader, BackupFileWriter},
     error::StorageError,
+    key::StorageKey,
     password_policy::PasswordPolicy,
     storage_config::{PasswordPolicyConfig, StorageConfig},
 };
@@ -31,28 +32,32 @@ pub struct Storage {
 }
 
 pub trait KeyValueStore {
-    fn get<K, V>(&self, key: K, transaction_id: Option<Uuid>) -> Result<Option<V>, StorageError>
+    fn get<V>(
+        &self,
+        key: StorageKey,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Option<V>, StorageError>
     where
-        K: AsRef<str>,
         V: DeserializeOwned;
 
-    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<Uuid>) -> Result<(), StorageError>
+    fn set<V>(
+        &self,
+        key: StorageKey,
+        value: V,
+        transaction_id: Option<Uuid>,
+    ) -> Result<(), StorageError>
     where
-        K: AsRef<str>,
         V: Serialize;
 
-    fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
-    where
-        K: AsRef<str>;
+    fn remove(&self, key: StorageKey, transaction_id: Option<Uuid>) -> Result<(), StorageError>;
 
-    fn update<K, V>(
+    fn update<V>(
         &self,
-        id: K,
+        key: StorageKey,
         updates: &HashMap<&str, Value>,
         transaction_id: Option<Uuid>,
     ) -> Result<V, StorageError>
     where
-        K: AsRef<str> + std::marker::Copy,
         V: Serialize + DeserializeOwned + Clone;
 }
 
@@ -691,7 +696,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn has_key(&self, key: &str, transaction_id: Option<Uuid>) -> Result<bool, StorageError> {
+    pub fn has_key(
+        &self,
+        key: StorageKey,
+        transaction_id: Option<Uuid>,
+    ) -> Result<bool, StorageError> {
+        let key = key.joined();
         let result = match self.effective_transaction_id(transaction_id) {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
@@ -816,13 +826,16 @@ impl Storage {
 }
 
 impl KeyValueStore for Storage {
-    fn get<K, V>(&self, key: K, transaction_id: Option<Uuid>) -> Result<Option<V>, StorageError>
+    fn get<V>(
+        &self,
+        key: StorageKey,
+        transaction_id: Option<Uuid>,
+    ) -> Result<Option<V>, StorageError>
     where
-        K: AsRef<str>,
         V: DeserializeOwned,
     {
-        let key = key.as_ref();
-        let value = self.read(key, self.effective_transaction_id(transaction_id))?;
+        let key = key.joined();
+        let value = self.read(&key, self.effective_transaction_id(transaction_id))?;
 
         match value {
             Some(value) => {
@@ -834,38 +847,38 @@ impl KeyValueStore for Storage {
         }
     }
 
-    fn set<K, V>(&self, key: K, value: V, transaction_id: Option<Uuid>) -> Result<(), StorageError>
+    fn set<V>(
+        &self,
+        key: StorageKey,
+        value: V,
+        transaction_id: Option<Uuid>,
+    ) -> Result<(), StorageError>
     where
-        K: AsRef<str>,
         V: Serialize,
     {
-        let key = key.as_ref();
+        let key = key.joined();
         let value = serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
 
-        self.write(key, &value, self.effective_transaction_id(transaction_id))
+        self.write(&key, &value, self.effective_transaction_id(transaction_id))
     }
 
-    fn remove<K>(&self, key: K, transaction_id: Option<Uuid>) -> Result<(), StorageError>
-    where
-        K: AsRef<str>,
-    {
-        let key = key.as_ref();
+    fn remove(&self, key: StorageKey, transaction_id: Option<Uuid>) -> Result<(), StorageError> {
+        let key = key.joined();
 
-        self.delete(key, self.effective_transaction_id(transaction_id))
+        self.delete(&key, self.effective_transaction_id(transaction_id))
     }
 
-    fn update<K, V>(
+    fn update<V>(
         &self,
-        id: K,
+        key: StorageKey,
         updates: &HashMap<&str, Value>,
         transaction_id: Option<Uuid>,
     ) -> Result<V, StorageError>
     where
-        K: AsRef<str> + std::marker::Copy,
         V: Serialize + DeserializeOwned + Clone,
     {
         // 1. Fetch the existing value from the database
-        let value: Option<V> = self.get(id, transaction_id)?;
+        let value: Option<V> = self.get(key.clone(), transaction_id)?;
 
         if let Some(value) = value {
             // 2. Convert the existing value into a JSON object
@@ -886,7 +899,7 @@ impl KeyValueStore for Storage {
                 serde_json::from_value(json_value).map_err(|_| StorageError::SerializationError)?;
 
             // 5. Save the updated value back to the database
-            self.set(id, updated_value.clone(), transaction_id)?;
+            self.set(key, updated_value.clone(), transaction_id)?;
 
             Ok(updated_value)
         } else {
@@ -902,6 +915,7 @@ fn create_options() -> rocksdb::Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::key::StorageKey;
     use crate::storage_config::PasswordPolicyConfig;
     use rand::{rng, Rng};
     use redact::Secret;
@@ -1041,9 +1055,9 @@ mod tests {
     #[test]
     fn test_partial_get_deserializes_values() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.set("item1", "value1".to_string(), None)?;
-        store.set("item2", "value2".to_string(), None)?;
-        store.set("other", "value3".to_string(), None)?; // outside the prefix
+        store.set(StorageKey::from("item1"), "value1".to_string(), None)?;
+        store.set(StorageKey::from("item2"), "value2".to_string(), None)?;
+        store.set(StorageKey::from("other"), "value3".to_string(), None)?; // outside the prefix
 
         let mut values: Vec<String> = store.partial_get("item", None)?;
         values.sort();
@@ -1119,9 +1133,9 @@ mod tests {
     #[test]
     fn test_partial_get_limited_deserializes_values() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.set("item2", "value2".to_string(), None)?;
-        store.set("item1", "value1".to_string(), None)?;
-        store.set("other", "value3".to_string(), None)?; // outside the prefix
+        store.set(StorageKey::from("item2"), "value2".to_string(), None)?;
+        store.set(StorageKey::from("item1"), "value1".to_string(), None)?;
+        store.set(StorageKey::from("other"), "value3".to_string(), None)?; // outside the prefix
 
         let values: Vec<String> = store.partial_get_limited("item", Some(1), None)?;
         assert_eq!(values, vec!["value1".to_string()]);
@@ -1142,7 +1156,7 @@ mod tests {
         let (_, _, store) = create_path_and_storage(false)?;
         store.begin_global_transaction()?;
         // set routes to the global transaction when given no transaction id.
-        store.set("test1", "test_value1".to_string(), None)?;
+        store.set(StorageKey::from("test1"), "test_value1".to_string(), None)?;
 
         // Staged in the global transaction, so only a read that goes through it can see this.
         let values: Vec<String> = store.partial_get_limited("test", Some(1), None)?;
@@ -1169,8 +1183,8 @@ mod tests {
     fn test_has_key() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1", None)?;
-        assert!(store.has_key("test1", None)?);
-        assert!(!store.has_key("test2", None)?);
+        assert!(store.has_key(StorageKey::from("test1"), None)?);
+        assert!(!store.has_key(StorageKey::from("test2"), None)?);
         Storage::delete_db_files(store)?;
         Ok(())
     }
@@ -1322,13 +1336,13 @@ mod tests {
     #[test]
     fn test_encrypt_and_decrypt() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(true)?;
-        store.set("test1", "test_value1", None)?;
-        let data = store.get::<String, String>("test1".to_string(), None)?;
+        store.set(StorageKey::from("test1"), "test_value1", None)?;
+        let data = store.get::<String>(StorageKey::from("test1"), None)?;
         assert!(data.is_some());
         assert_eq!(data.unwrap(), "test_value1");
 
-        store.set("test1", "test_value2", None)?;
-        let data = store.get::<String, String>("test1".to_string(), None)?;
+        store.set(StorageKey::from("test1"), "test_value2", None)?;
+        let data = store.get::<String>(StorageKey::from("test1"), None)?;
         assert!(data.is_some());
         assert_eq!(data.unwrap(), "test_value2");
 
@@ -1410,7 +1424,7 @@ mod tests {
     #[test]
     fn test_change_password() -> Result<(), StorageError> {
         let (path, _, store) = create_path_and_storage(true)?;
-        store.set("test1", "test_value1", None)?;
+        store.set(StorageKey::from("test1"), "test_value1", None)?;
 
         store.change_password(Secret::from("password"), Secret::from("new_password"))?;
 
@@ -1431,7 +1445,7 @@ mod tests {
         )?;
 
         assert_eq!(
-            store.get::<String, String>("test1".to_string(), None)?,
+            store.get::<String>(StorageKey::from("test1"), None)?,
             Some("test_value1".to_string())
         );
         Storage::delete_db_files(store)?;
@@ -1443,10 +1457,13 @@ mod tests {
     #[test]
     fn test_remove_value() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.set("test", "test_value", None)?;
-        assert_eq!(store.get("test", None)?, Some("test_value".to_string()));
-        store.remove("test", None)?;
-        assert_eq!(store.get::<&str, String>("test", None)?, None);
+        store.set(StorageKey::from("test"), "test_value", None)?;
+        assert_eq!(
+            store.get(StorageKey::from("test"), None)?,
+            Some("test_value".to_string())
+        );
+        store.remove(StorageKey::from("test"), None)?;
+        assert_eq!(store.get::<String>(StorageKey::from("test"), None)?, None);
         Storage::delete_db_files(store)?;
         Ok(())
     }
@@ -1458,17 +1475,29 @@ mod tests {
         store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
         // Using set with trasanction_id = None should apply to the global transaction
-        store.set("test1", "test_value1", None)?;
-        store.set("test2", "test_value2", None)?;
+        store.set(StorageKey::from("test1"), "test_value1", None)?;
+        store.set(StorageKey::from("test2"), "test_value2", None)?;
 
         // Visible before commit
-        assert_eq!(store.get("test1", None)?, Some("test_value1".to_string()));
-        assert_eq!(store.get("test2", None)?, Some("test_value2".to_string()));
+        assert_eq!(
+            store.get(StorageKey::from("test1"), None)?,
+            Some("test_value1".to_string())
+        );
+        assert_eq!(
+            store.get(StorageKey::from("test2"), None)?,
+            Some("test_value2".to_string())
+        );
         store.commit_global_transaction()?;
 
-        assert_eq!(store.get("test1", None)?, Some("test_value1".to_string()));
-        assert_eq!(store.get("test2", None)?, Some("test_value2".to_string()));
-        assert_eq!(store.get::<&str, String>("test3", None)?, None);
+        assert_eq!(
+            store.get(StorageKey::from("test1"), None)?,
+            Some("test_value1".to_string())
+        );
+        assert_eq!(
+            store.get(StorageKey::from("test2"), None)?,
+            Some("test_value2".to_string())
+        );
+        assert_eq!(store.get::<String>(StorageKey::from("test3"), None)?, None);
 
         Storage::delete_db_files(store)?;
         Ok(())
@@ -1480,16 +1509,22 @@ mod tests {
         let (_, _, store) = create_path_and_storage(false)?;
         store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
-        store.set("test1", "test_value1", None)?;
-        store.set("test2", "test_value2", None)?;
+        store.set(StorageKey::from("test1"), "test_value1", None)?;
+        store.set(StorageKey::from("test2"), "test_value2", None)?;
 
         // Changes should be visible before commit
-        assert_eq!(store.get("test1", None)?, Some("test_value1".to_string()));
-        assert_eq!(store.get("test2", None)?, Some("test_value2".to_string()));
+        assert_eq!(
+            store.get(StorageKey::from("test1"), None)?,
+            Some("test_value1".to_string())
+        );
+        assert_eq!(
+            store.get(StorageKey::from("test2"), None)?,
+            Some("test_value2".to_string())
+        );
         store.rollback_global_transaction()?;
 
-        assert_eq!(store.get::<&str, String>("test1", None)?, None);
-        assert_eq!(store.get::<&str, String>("test2", None)?, None);
+        assert_eq!(store.get::<String>(StorageKey::from("test1"), None)?, None);
+        assert_eq!(store.get::<String>(StorageKey::from("test2"), None)?, None);
 
         Storage::delete_db_files(store)?;
         Ok(())
@@ -1499,21 +1534,21 @@ mod tests {
     #[test]
     fn test_global_transactional_delete() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.set("test1", "test_value1", None)?;
+        store.set(StorageKey::from("test1"), "test_value1", None)?;
         store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
-        store.remove("test1", None)?;
+        store.remove(StorageKey::from("test1"), None)?;
         // Not visible before commit because it's part of a global transaction
-        assert_eq!(store.get::<&str, String>("test1", None)?, None);
+        assert_eq!(store.get::<String>(StorageKey::from("test1"), None)?, None);
         store.rollback_global_transaction()?;
 
         store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
-        store.remove("test1", None)?;
+        store.remove(StorageKey::from("test1"), None)?;
 
         store.commit_global_transaction()?;
         // Gone after commit
-        assert_eq!(store.get::<&str, String>("test1", None)?, None);
+        assert_eq!(store.get::<String>(StorageKey::from("test1"), None)?, None);
 
         Storage::delete_db_files(store)?;
         Ok(())
@@ -1561,6 +1596,59 @@ mod tests {
             _ => panic!("Expected NotFound(Transaction) error"),
         }
 
+        Ok(())
+    }
+
+    // Test that StorageKey can be used directly with get/set/remove/has_key
+    // (via AsRef<str>) and with the partial_compare* prefix scans (via Deref).
+    #[test]
+    fn test_storage_key_works_with_get_set_and_partial_compare() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+
+        let key = StorageKey::new(["program", "123", "state"]);
+        store.set(key.clone(), "running".to_string(), None)?;
+        assert_eq!(
+            store.get::<String>(key.clone(), None)?,
+            Some("running".to_string())
+        );
+        assert!(store.has_key(key.clone(), None)?);
+
+        let scan_key = StorageKey::new(["program", "123"]);
+        assert_eq!(
+            store.partial_compare(&scan_key.to_scan_prefix(), None)?,
+            vec![("program/123/state".to_string(), "\"running\"".to_string())]
+        );
+
+        store.remove(key.clone(), None)?;
+        assert!(!store.has_key(key, None)?);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Regression test for the prefix-scan ambiguity a raw starts_with-based
+    // scan has: a scan for "program/123" would also match "program/1234/...".
+    // StorageKey::to_scan_prefix appends a trailing separator to rule that out.
+    #[test]
+    fn test_storage_key_scan_prefix_does_not_match_sibling_ids() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+
+        store.set(
+            StorageKey::new(["program", "123", "state"]),
+            "a".to_string(),
+            None,
+        )?;
+        store.set(
+            StorageKey::new(["program", "1234", "state"]),
+            "b".to_string(),
+            None,
+        )?;
+
+        let scan_prefix = StorageKey::new(["program", "123"]).to_scan_prefix();
+        let keys = store.partial_compare_keys(&scan_prefix, None)?;
+        assert_eq!(keys, vec!["program/123/state".to_string()]);
+
+        Storage::delete_db_files(store)?;
         Ok(())
     }
 
