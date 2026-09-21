@@ -1,3 +1,4 @@
+use crate::error::StorageError;
 use std::fmt;
 
 /// The character every crate should join key segments with, instead of each picking its own.
@@ -8,24 +9,28 @@ pub const KEY_SEPARATOR: char = '/';
 pub struct StorageKey(Vec<String>);
 
 impl StorageKey {
-    pub fn new<I, S>(parts: I) -> Self
+    pub fn new<I, S>(parts: I) -> Result<Self, StorageError>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
         let parts: Vec<String> = parts.into_iter().map(Into::into).collect();
-        assert!(!parts.is_empty(), "StorageKey needs at least one segment");
-        for part in &parts {
-            validate_segment(part);
+        if parts.is_empty() {
+            return Err(StorageError::InvalidKey(
+                "StorageKey needs at least one segment".to_string(),
+            ));
         }
-        Self(parts)
+        for part in &parts {
+            validate_segment(part)?;
+        }
+        Ok(Self(parts))
     }
 
     pub fn joined(&self) -> String {
         self.0.join(&KEY_SEPARATOR.to_string())
     }
 
-    pub fn from_joined(joined: &str) -> Self {
+    pub fn from_joined(joined: &str) -> Result<Self, StorageError> {
         Self::new(joined.split(KEY_SEPARATOR))
     }
 
@@ -38,12 +43,18 @@ impl StorageKey {
     }
 }
 
-fn validate_segment(part: &str) {
-    assert!(!part.is_empty(), "StorageKey segments must not be empty");
-    assert!(
-        !part.contains(KEY_SEPARATOR),
-        "StorageKey segment {part:?} contains the reserved separator {KEY_SEPARATOR:?}"
-    );
+fn validate_segment(part: &str) -> Result<(), StorageError> {
+    if part.is_empty() {
+        return Err(StorageError::InvalidKey(
+            "StorageKey segments must not be empty".to_string(),
+        ));
+    }
+    if part.contains(KEY_SEPARATOR) {
+        return Err(StorageError::InvalidKey(format!(
+            "StorageKey segment {part:?} contains the reserved separator {KEY_SEPARATOR:?}"
+        )));
+    }
+    Ok(())
 }
 
 impl fmt::Display for StorageKey {
@@ -52,14 +63,18 @@ impl fmt::Display for StorageKey {
     }
 }
 
-impl From<&str> for StorageKey {
-    fn from(part: &str) -> Self {
+impl TryFrom<&str> for StorageKey {
+    type Error = StorageError;
+
+    fn try_from(part: &str) -> Result<Self, StorageError> {
         Self::new([part])
     }
 }
 
-impl From<String> for StorageKey {
-    fn from(part: String) -> Self {
+impl TryFrom<String> for StorageKey {
+    type Error = StorageError;
+
+    fn try_from(part: String) -> Result<Self, StorageError> {
         Self::new([part])
     }
 }
@@ -70,62 +85,69 @@ mod tests {
 
     #[test]
     fn joins_segments_with_the_shared_separator() {
-        let key = StorageKey::new(["program", "123", "state"]);
+        let key = StorageKey::new(["program", "123", "state"]).unwrap();
         assert_eq!(key.joined(), "program/123/state");
     }
 
     #[test]
     fn single_segment_key_has_no_separator() {
-        let key = StorageKey::new(["comms_allow_list"]);
+        let key = StorageKey::new(["comms_allow_list"]).unwrap();
         assert_eq!(key.joined(), "comms_allow_list");
     }
 
     #[test]
     fn scan_prefix_appends_a_trailing_separator() {
-        let key = StorageKey::new(["program", "123"]);
+        let key = StorageKey::new(["program", "123"]).unwrap();
         assert_eq!(key.to_scan_prefix(), "program/123/");
     }
 
     #[test]
     fn scan_prefix_does_not_match_a_sibling_that_shares_a_string_prefix() {
-        let prefix = StorageKey::new(["program", "123"]).to_scan_prefix();
+        let prefix = StorageKey::new(["program", "123"])
+            .unwrap()
+            .to_scan_prefix();
         assert!("program/123/state".starts_with(&prefix));
         assert!(!"program/1234/state".starts_with(&prefix));
     }
 
     #[test]
-    fn from_str_and_from_string_build_single_segment_keys() {
-        assert_eq!(StorageKey::from("wallet").joined(), "wallet");
-        assert_eq!(StorageKey::from("wallet".to_string()).joined(), "wallet");
+    fn try_from_str_and_try_from_string_build_single_segment_keys() {
+        assert_eq!(StorageKey::try_from("wallet").unwrap().joined(), "wallet");
+        assert_eq!(
+            StorageKey::try_from("wallet".to_string()).unwrap().joined(),
+            "wallet"
+        );
     }
 
     #[test]
     fn from_joined_round_trips_an_already_joined_key() {
-        let key = StorageKey::new(["program", "123", "state"]);
-        assert_eq!(StorageKey::from_joined(&key.joined()), key);
+        let key = StorageKey::new(["program", "123", "state"]).unwrap();
+        assert_eq!(StorageKey::from_joined(&key.joined()).unwrap(), key);
     }
 
     #[test]
-    #[should_panic(expected = "must not be empty")]
-    fn from_joined_panics_on_a_double_separator() {
-        StorageKey::from_joined("program//state");
+    fn from_joined_errors_on_a_double_separator() {
+        let err = StorageKey::from_joined("program//state").unwrap_err();
+        assert!(matches!(err, StorageError::InvalidKey(msg) if msg.contains("must not be empty")));
     }
 
     #[test]
-    #[should_panic(expected = "at least one segment")]
-    fn new_panics_on_empty_parts() {
-        StorageKey::new(Vec::<String>::new());
+    fn new_errors_on_empty_parts() {
+        let err = StorageKey::new(Vec::<String>::new()).unwrap_err();
+        assert!(
+            matches!(err, StorageError::InvalidKey(msg) if msg.contains("at least one segment"))
+        );
     }
 
     #[test]
-    #[should_panic(expected = "must not be empty")]
-    fn new_panics_on_empty_segment() {
-        StorageKey::new(["program", ""]);
+    fn new_errors_on_empty_segment() {
+        let err = StorageKey::new(["program", ""]).unwrap_err();
+        assert!(matches!(err, StorageError::InvalidKey(msg) if msg.contains("must not be empty")));
     }
 
     #[test]
-    #[should_panic(expected = "reserved separator")]
-    fn new_panics_on_segment_containing_the_separator() {
-        StorageKey::new(["program", "123/state"]);
+    fn new_errors_on_segment_containing_the_separator() {
+        let err = StorageKey::new(["program", "123/state"]).unwrap_err();
+        assert!(matches!(err, StorageError::InvalidKey(msg) if msg.contains("reserved separator")));
     }
 }

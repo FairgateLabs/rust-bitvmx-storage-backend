@@ -1055,9 +1055,9 @@ mod tests {
     #[test]
     fn test_partial_get_deserializes_values() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.set(StorageKey::from("item1"), "value1".to_string(), None)?;
-        store.set(StorageKey::from("item2"), "value2".to_string(), None)?;
-        store.set(StorageKey::from("other"), "value3".to_string(), None)?; // outside the prefix
+        store.set(StorageKey::try_from("item1")?, "value1".to_string(), None)?;
+        store.set(StorageKey::try_from("item2")?, "value2".to_string(), None)?;
+        store.set(StorageKey::try_from("other")?, "value3".to_string(), None)?; // outside the prefix
 
         let mut values: Vec<String> = store.partial_get("item", None)?;
         values.sort();
@@ -1133,9 +1133,9 @@ mod tests {
     #[test]
     fn test_partial_get_limited_deserializes_values() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.set(StorageKey::from("item2"), "value2".to_string(), None)?;
-        store.set(StorageKey::from("item1"), "value1".to_string(), None)?;
-        store.set(StorageKey::from("other"), "value3".to_string(), None)?; // outside the prefix
+        store.set(StorageKey::try_from("item2")?, "value2".to_string(), None)?;
+        store.set(StorageKey::try_from("item1")?, "value1".to_string(), None)?;
+        store.set(StorageKey::try_from("other")?, "value3".to_string(), None)?; // outside the prefix
 
         let values: Vec<String> = store.partial_get_limited("item", Some(1), None)?;
         assert_eq!(values, vec!["value1".to_string()]);
@@ -1156,7 +1156,11 @@ mod tests {
         let (_, _, store) = create_path_and_storage(false)?;
         store.begin_global_transaction()?;
         // set routes to the global transaction when given no transaction id.
-        store.set(StorageKey::from("test1"), "test_value1".to_string(), None)?;
+        store.set(
+            StorageKey::try_from("test1")?,
+            "test_value1".to_string(),
+            None,
+        )?;
 
         // Staged in the global transaction, so only a read that goes through it can see this.
         let values: Vec<String> = store.partial_get_limited("test", Some(1), None)?;
@@ -1183,8 +1187,8 @@ mod tests {
     fn test_has_key() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         store.write("test1", "test_value1", None)?;
-        assert!(store.has_key(StorageKey::from("test1"), None)?);
-        assert!(!store.has_key(StorageKey::from("test2"), None)?);
+        assert!(store.has_key(StorageKey::try_from("test1")?, None)?);
+        assert!(!store.has_key(StorageKey::try_from("test2")?, None)?);
         Storage::delete_db_files(store)?;
         Ok(())
     }
@@ -1336,13 +1340,13 @@ mod tests {
     #[test]
     fn test_encrypt_and_decrypt() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(true)?;
-        store.set(StorageKey::from("test1"), "test_value1", None)?;
-        let data = store.get::<String>(StorageKey::from("test1"), None)?;
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        let data = store.get::<String>(StorageKey::try_from("test1")?, None)?;
         assert!(data.is_some());
         assert_eq!(data.unwrap(), "test_value1");
 
-        store.set(StorageKey::from("test1"), "test_value2", None)?;
-        let data = store.get::<String>(StorageKey::from("test1"), None)?;
+        store.set(StorageKey::try_from("test1")?, "test_value2", None)?;
+        let data = store.get::<String>(StorageKey::try_from("test1")?, None)?;
         assert!(data.is_some());
         assert_eq!(data.unwrap(), "test_value2");
 
@@ -1424,7 +1428,7 @@ mod tests {
     #[test]
     fn test_change_password() -> Result<(), StorageError> {
         let (path, _, store) = create_path_and_storage(true)?;
-        store.set(StorageKey::from("test1"), "test_value1", None)?;
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
 
         store.change_password(Secret::from("password"), Secret::from("new_password"))?;
 
@@ -1445,7 +1449,7 @@ mod tests {
         )?;
 
         assert_eq!(
-            store.get::<String>(StorageKey::from("test1"), None)?,
+            store.get::<String>(StorageKey::try_from("test1")?, None)?,
             Some("test_value1".to_string())
         );
         Storage::delete_db_files(store)?;
@@ -1457,13 +1461,16 @@ mod tests {
     #[test]
     fn test_remove_value() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.set(StorageKey::from("test"), "test_value", None)?;
+        store.set(StorageKey::try_from("test")?, "test_value", None)?;
         assert_eq!(
-            store.get(StorageKey::from("test"), None)?,
+            store.get(StorageKey::try_from("test")?, None)?,
             Some("test_value".to_string())
         );
-        store.remove(StorageKey::from("test"), None)?;
-        assert_eq!(store.get::<String>(StorageKey::from("test"), None)?, None);
+        store.remove(StorageKey::try_from("test")?, None)?;
+        assert_eq!(
+            store.get::<String>(StorageKey::try_from("test")?, None)?,
+            None
+        );
         Storage::delete_db_files(store)?;
         Ok(())
     }
@@ -1475,29 +1482,32 @@ mod tests {
         store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
         // Using set with trasanction_id = None should apply to the global transaction
-        store.set(StorageKey::from("test1"), "test_value1", None)?;
-        store.set(StorageKey::from("test2"), "test_value2", None)?;
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        store.set(StorageKey::try_from("test2")?, "test_value2", None)?;
 
         // Visible before commit
         assert_eq!(
-            store.get(StorageKey::from("test1"), None)?,
+            store.get(StorageKey::try_from("test1")?, None)?,
             Some("test_value1".to_string())
         );
         assert_eq!(
-            store.get(StorageKey::from("test2"), None)?,
+            store.get(StorageKey::try_from("test2")?, None)?,
             Some("test_value2".to_string())
         );
         store.commit_global_transaction()?;
 
         assert_eq!(
-            store.get(StorageKey::from("test1"), None)?,
+            store.get(StorageKey::try_from("test1")?, None)?,
             Some("test_value1".to_string())
         );
         assert_eq!(
-            store.get(StorageKey::from("test2"), None)?,
+            store.get(StorageKey::try_from("test2")?, None)?,
             Some("test_value2".to_string())
         );
-        assert_eq!(store.get::<String>(StorageKey::from("test3"), None)?, None);
+        assert_eq!(
+            store.get::<String>(StorageKey::try_from("test3")?, None)?,
+            None
+        );
 
         Storage::delete_db_files(store)?;
         Ok(())
@@ -1509,22 +1519,28 @@ mod tests {
         let (_, _, store) = create_path_and_storage(false)?;
         store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
-        store.set(StorageKey::from("test1"), "test_value1", None)?;
-        store.set(StorageKey::from("test2"), "test_value2", None)?;
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        store.set(StorageKey::try_from("test2")?, "test_value2", None)?;
 
         // Changes should be visible before commit
         assert_eq!(
-            store.get(StorageKey::from("test1"), None)?,
+            store.get(StorageKey::try_from("test1")?, None)?,
             Some("test_value1".to_string())
         );
         assert_eq!(
-            store.get(StorageKey::from("test2"), None)?,
+            store.get(StorageKey::try_from("test2")?, None)?,
             Some("test_value2".to_string())
         );
         store.rollback_global_transaction()?;
 
-        assert_eq!(store.get::<String>(StorageKey::from("test1"), None)?, None);
-        assert_eq!(store.get::<String>(StorageKey::from("test2"), None)?, None);
+        assert_eq!(
+            store.get::<String>(StorageKey::try_from("test1")?, None)?,
+            None
+        );
+        assert_eq!(
+            store.get::<String>(StorageKey::try_from("test2")?, None)?,
+            None
+        );
 
         Storage::delete_db_files(store)?;
         Ok(())
@@ -1534,21 +1550,27 @@ mod tests {
     #[test]
     fn test_global_transactional_delete() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.set(StorageKey::from("test1"), "test_value1", None)?;
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
         store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
-        store.remove(StorageKey::from("test1"), None)?;
+        store.remove(StorageKey::try_from("test1")?, None)?;
         // Not visible before commit because it's part of a global transaction
-        assert_eq!(store.get::<String>(StorageKey::from("test1"), None)?, None);
+        assert_eq!(
+            store.get::<String>(StorageKey::try_from("test1")?, None)?,
+            None
+        );
         store.rollback_global_transaction()?;
 
         store.begin_global_transaction()?;
         assert!(store.global_transaction_is_active());
-        store.remove(StorageKey::from("test1"), None)?;
+        store.remove(StorageKey::try_from("test1")?, None)?;
 
         store.commit_global_transaction()?;
         // Gone after commit
-        assert_eq!(store.get::<String>(StorageKey::from("test1"), None)?, None);
+        assert_eq!(
+            store.get::<String>(StorageKey::try_from("test1")?, None)?,
+            None
+        );
 
         Storage::delete_db_files(store)?;
         Ok(())
@@ -1605,7 +1627,7 @@ mod tests {
     fn test_storage_key_works_with_get_set_and_partial_compare() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
 
-        let key = StorageKey::new(["program", "123", "state"]);
+        let key = StorageKey::new(["program", "123", "state"])?;
         store.set(key.clone(), "running".to_string(), None)?;
         assert_eq!(
             store.get::<String>(key.clone(), None)?,
@@ -1613,7 +1635,7 @@ mod tests {
         );
         assert!(store.has_key(key.clone(), None)?);
 
-        let scan_key = StorageKey::new(["program", "123"]);
+        let scan_key = StorageKey::new(["program", "123"])?;
         assert_eq!(
             store.partial_compare(&scan_key.to_scan_prefix(), None)?,
             vec![("program/123/state".to_string(), "\"running\"".to_string())]
@@ -1634,17 +1656,17 @@ mod tests {
         let (_, _, store) = create_path_and_storage(false)?;
 
         store.set(
-            StorageKey::new(["program", "123", "state"]),
+            StorageKey::new(["program", "123", "state"])?,
             "a".to_string(),
             None,
         )?;
         store.set(
-            StorageKey::new(["program", "1234", "state"]),
+            StorageKey::new(["program", "1234", "state"])?,
             "b".to_string(),
             None,
         )?;
 
-        let scan_prefix = StorageKey::new(["program", "123"]).to_scan_prefix();
+        let scan_prefix = StorageKey::new(["program", "123"])?.to_scan_prefix();
         let keys = store.partial_compare_keys(&scan_prefix, None)?;
         assert_eq!(keys, vec!["program/123/state".to_string()]);
 
