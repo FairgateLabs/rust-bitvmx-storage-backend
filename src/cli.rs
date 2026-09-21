@@ -5,6 +5,7 @@ use redact::Secret;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use storage_backend::key::StorageKey;
 use storage_backend::storage::{KeyValueStore, Storage};
 use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
 
@@ -255,8 +256,9 @@ pub fn run(args: Cli) -> Result<(), String> {
             eprintln!("Already handled above");
         }
         Action::Write(storage_key_value) => {
+            let key = StorageKey::from_joined(&storage_key_value.key).map_err(|e| e.to_string())?;
             storage
-                .set(&storage_key_value.key, &storage_key_value.value, None)
+                .set(key, &storage_key_value.value, None)
                 .map_err(|e| e.to_string())?;
             println!(
                 "Wrote key {} with value {} to {:?}",
@@ -264,8 +266,9 @@ pub fn run(args: Cli) -> Result<(), String> {
             );
         }
         Action::Read(storage_and_key) => {
+            let key = StorageKey::from_joined(&storage_and_key.key).map_err(|e| e.to_string())?;
             match storage
-                .get::<&str, String>(&storage_and_key.key, None)
+                .get::<String>(key, None)
                 .map_err(|e| e.to_string())?
             {
                 Some(value) => println!(
@@ -279,9 +282,8 @@ pub fn run(args: Cli) -> Result<(), String> {
             }
         }
         Action::Delete(storage_and_key) => {
-            storage
-                .remove(&storage_and_key.key, None)
-                .map_err(|e| e.to_string())?;
+            let key = StorageKey::from_joined(&storage_and_key.key).map_err(|e| e.to_string())?;
+            storage.remove(key, None).map_err(|e| e.to_string())?;
             println!(
                 "Deleted key {} from {:?}",
                 storage_and_key.key, storage_and_key.storage_settings
@@ -297,9 +299,8 @@ pub fn run(args: Cli) -> Result<(), String> {
             );
         }
         Action::Contains(storage_and_key) => {
-            let contains = storage
-                .has_key(&storage_and_key.key, None)
-                .map_err(|e| e.to_string())?;
+            let key = StorageKey::from_joined(&storage_and_key.key).map_err(|e| e.to_string())?;
+            let contains = storage.has_key(key, None).map_err(|e| e.to_string())?;
             println!(
                 "Key {} {} in {:?}",
                 storage_and_key.key,
@@ -377,8 +378,9 @@ pub fn run(args: Cli) -> Result<(), String> {
             let keys = storage.keys(None).map_err(|e| e.to_string())?;
             let mut json_map = serde_json::Map::new();
             for key in keys {
+                let storage_key = StorageKey::from_joined(&key).map_err(|e| e.to_string())?;
                 if let Some(value) = storage
-                    .get::<&str, String>(&key, None)
+                    .get::<String>(storage_key, None)
                     .map_err(|e| e.to_string())?
                 {
                     let json_value: serde_json::Value =

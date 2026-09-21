@@ -12,6 +12,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{collections::BTreeMap, fs::File, io, io::Write, time::Duration};
+use storage_backend::key::StorageKey;
 use storage_backend::storage::{KeyValueStore, Storage};
 
 #[derive(Clone)]
@@ -502,7 +503,11 @@ fn draw_value_panel(
 }
 
 fn value_for_key(storage: &Storage, key: &str) -> String {
-    match storage.get::<&str, serde_json::Value>(key, None) {
+    let storage_key = match StorageKey::from_joined(key) {
+        Ok(storage_key) => storage_key,
+        Err(e) => return format!("Failed to read value: {e}"),
+    };
+    match storage.get::<serde_json::Value>(storage_key, None) {
         Ok(Some(value)) => {
             serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
         }
@@ -532,8 +537,9 @@ fn export_entry(
 
     let mut json_map = serde_json::Map::new();
     for key in &keys {
+        let storage_key = StorageKey::from_joined(key).map_err(|e| e.to_string())?;
         let value = storage
-            .get::<&str, serde_json::Value>(key, None)
+            .get::<serde_json::Value>(storage_key, None)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Key not found: {key}"))?;
         json_map.insert((*key).to_string(), value);
