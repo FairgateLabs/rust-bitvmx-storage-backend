@@ -27,6 +27,12 @@ struct StorageSettings {
 }
 
 #[derive(Parser, Debug, Clone)]
+struct RepairSettings {
+    #[clap(short, long)]
+    storage_path: PathBuf,
+}
+
+#[derive(Parser, Debug, Clone)]
 struct BackupSettings {
     #[clap(short, long, default_value = "backup")]
     backup_path: PathBuf,
@@ -66,6 +72,7 @@ struct UiSettings {
 #[derive(Subcommand, Debug)]
 enum Action {
     New(StorageSettings),
+    Repair(RepairSettings),
     Write(StorageKeyValue),
     Read(StorageAndKey),
     Delete(StorageAndKey),
@@ -102,6 +109,7 @@ impl Action {
     fn get_storage_path(&self) -> &PathBuf {
         match self {
             Action::New(args) => &args.storage_path,
+            Action::Repair(args) => &args.storage_path,
             Action::Write(args) => &args.storage_settings.storage_path,
             Action::Read(args) => &args.storage_settings.storage_path,
             Action::Delete(args) => &args.storage_settings.storage_path,
@@ -127,6 +135,7 @@ impl Action {
     fn get_encryption_password(&self) -> Option<Secret<String>> {
         match self {
             Action::New(args) => args.password.clone(),
+            Action::Repair(_) => None,
             Action::Write(args) => args.storage_settings.password.clone(),
             Action::Read(args) => args.storage_settings.password.clone(),
             Action::Delete(args) => args.storage_settings.password.clone(),
@@ -229,6 +238,11 @@ pub fn run(args: Cli) -> Result<(), String> {
             println!("Created new storage at {:?}", storage_settings.storage_path);
             return Ok(());
         }
+        Action::Repair(repair_settings) => {
+            Storage::repair(&repair_settings.storage_path).map_err(|e| e.to_string())?;
+            println!("Repaired storage at {:?}", repair_settings.storage_path);
+            return Ok(());
+        }
         #[cfg(feature = "ui")]
         Action::Ui(ui_settings) => {
             let config = load_ui_storage_config(&ui_settings)?;
@@ -251,8 +265,8 @@ pub fn run(args: Cli) -> Result<(), String> {
     };
 
     match args.action {
-        Action::New(_) => {
-            eprintln!("Already handled above");
+        Action::New(_) | Action::Repair(_) => {
+            unreachable!("new and repair are handled before the regular storage command path");
         }
         Action::Write(storage_key_value) => {
             storage

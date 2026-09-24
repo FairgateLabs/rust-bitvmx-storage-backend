@@ -93,6 +93,14 @@ impl Storage {
         Self::open_db(config, None, &options)
     }
 
+    /// Repairs a RocksDB database at `path`.
+    ///
+    /// The database must not be open while it is being repaired.
+    pub fn repair<P: AsRef<Path>>(path: P) -> Result<(), StorageError> {
+        rocksdb::TransactionDB::<rocksdb::SingleThreaded>::repair(&create_options(), path)?;
+        Ok(())
+    }
+
     fn open_db(
         config: &StorageConfig,
         password_policy_config: Option<PasswordPolicyConfig>,
@@ -962,6 +970,20 @@ mod tests {
     fn test_new_storage_starts_empty() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
         assert!(store.is_empty(None)?);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_repair_storage() -> Result<(), StorageError> {
+        let (path, config, store) = create_path_and_storage(false)?;
+        store.write("test", "test_value", None)?;
+        drop(store);
+
+        Storage::repair(&path)?;
+
+        let store = Storage::open(&config)?;
+        assert_eq!(store.read("test", None)?, Some("test_value".to_string()));
         Storage::delete_db_files(store)?;
         Ok(())
     }
