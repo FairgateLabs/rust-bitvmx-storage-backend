@@ -1,3 +1,4 @@
+use crate::dek::Dek;
 use age::{
     scrypt::Identity,
     secrecy::SecretString,
@@ -11,8 +12,8 @@ pub struct BackupFileWriter<W: Write> {
 }
 
 impl<W: Write> BackupFileWriter<W> {
-    pub fn new(writer: W, password: Vec<u8>) -> io::Result<Self> {
-        let passphrase = SecretString::new(hex::encode(password).into());
+    pub fn new(writer: W, dek: &Dek) -> io::Result<Self> {
+        let passphrase = SecretString::new(hex::encode(dek.as_bytes()).into());
         let encryptor = Encryptor::with_user_passphrase(passphrase);
         let stream_writer = encryptor.wrap_output(writer)?;
         Ok(BackupFileWriter {
@@ -43,8 +44,8 @@ pub struct BackupFileReader<R: Read> {
 }
 
 impl<R: Read> BackupFileReader<R> {
-    pub fn new(reader: R, password: Vec<u8>) -> io::Result<Self> {
-        let passphrase = SecretString::new(hex::encode(password).into());
+    pub fn new(reader: R, dek: &Dek) -> io::Result<Self> {
+        let passphrase = SecretString::new(hex::encode(dek.as_bytes()).into());
         let decryptor =
             Decryptor::new(reader).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 

@@ -1,12 +1,12 @@
 use crate::{
     backup_io::{BackupFileReader, BackupFileWriter},
+    dek::Dek,
     error::StorageError,
     key::StorageKey,
     password_policy::PasswordPolicy,
     storage_config::{PasswordPolicyConfig, StorageConfig},
 };
-use cocoon::{Cocoon, MiniCocoon};
-use rand::{rngs::SysRng, TryRng};
+use cocoon::Cocoon;
 use redact::Secret;
 use rocksdb::{TransactionDB, WriteOptions};
 use serde::{de::DeserializeOwned, Serialize};
@@ -27,7 +27,7 @@ const GLOBAL_TRANSACTION_ID: Uuid = Uuid::nil();
 pub struct Storage {
     db: rocksdb::TransactionDB,
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
-    password: Option<Vec<u8>>,
+    dek: Option<Dek>,
     password_policy: PasswordPolicy,
 }
 
@@ -125,23 +125,23 @@ impl Storage {
 
                     let cocoon = Cocoon::new(password.expose_secret().as_bytes());
 
-                    cocoon
+                    let dek = cocoon
                         .parse(&mut entry_cursor)
-                        .map_err(|_| StorageError::WrongPassword)?
+                        .map_err(|_| StorageError::WrongPassword)?;
+                    Dek::try_from(dek)?
                 }
                 None => {
-                    let mut bytes = [0u8; 32];
-                    SysRng.try_fill_bytes(&mut bytes)?;
+                    let dek = Dek::generate()?;
 
                     let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
                     let mut cocoon = Cocoon::new(password.expose_secret().as_bytes());
                     cocoon
-                        .dump(bytes.to_vec(), &mut entry_cursor)
+                        .dump(dek.as_bytes().to_vec(), &mut entry_cursor)
                         .map_err(|error| StorageError::FailedToEncryptData { error })?;
                     let encrypted_dek = entry_cursor.into_inner();
                     db.put(DEK_KEY.as_bytes(), encrypted_dek)
                         .map_err(|_| StorageError::WriteError)?;
-                    bytes.to_vec()
+                    dek
                 }
             };
 
@@ -153,7 +153,7 @@ impl Storage {
         Ok(Storage {
             db,
             transactions: RefCell::new(HashMap::new()),
-            password: dek,
+            dek,
             password_policy,
         })
     }
@@ -163,7 +163,7 @@ impl Storage {
         old_password: Secret<String>,
         new_password: Secret<String>,
     ) -> Result<(), StorageError> {
-        match &self.password {
+        match &self.dek {
             Some(_) => {
                 if !self.password_policy.is_valid(new_password.expose_secret()) {
                     return Err(StorageError::WeakPassword(self.password_policy.clone()));
@@ -252,8 +252,9 @@ impl Storage {
             let dek = cocoon
                 .parse(&mut entry_cursor)
                 .map_err(|_| StorageError::WrongPassword)?;
+            let dek = Dek::try_from(dek)?;
 
-            let mut backup_reader = BackupFileReader::new(backup_file, dek)?;
+            let mut backup_reader = BackupFileReader::new(backup_file, &dek)?;
 
             while backup_reader.read_until(b';', &mut buf)? != 0 {
                 buf.pop();
@@ -303,18 +304,17 @@ impl Storage {
         let mut data_vec = Vec::new();
         let mut item_counter = 0;
 
-        let mut dek = [0u8; 32];
-        SysRng.try_fill_bytes(&mut dek)?;
+        let dek = Dek::generate()?;
 
         let mut entry_cursor: Cursor<Vec<u8>> = Cursor::new(Vec::new());
         let mut cocoon = Cocoon::new(password.expose_secret().as_bytes());
         cocoon
-            .dump(dek.to_vec(), &mut entry_cursor)
+            .dump(dek.as_bytes().to_vec(), &mut entry_cursor)
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
         let encrypted_dek = entry_cursor.into_inner();
         dek_file.write_all(&encrypted_dek)?;
 
-        let mut backup_writer = BackupFileWriter::new(backup_file, dek.to_vec())?;
+        let mut backup_writer = BackupFileWriter::new(backup_file, &dek)?;
 
         while let Some(Ok((k, v))) = iter.next() {
             data_vec.push((k.to_vec(), v.to_vec()));
@@ -384,8 +384,8 @@ impl Storage {
     ) -> Result<(), StorageError> {
         let mut data = value.as_bytes().to_vec();
 
-        if self.password.is_some() {
-            data = self.encrypt_data(data)?
+        if let Some(dek) = &self.dek {
+            data = dek.encrypt(&data)?
         }
 
         match transaction_id {
@@ -429,8 +429,8 @@ impl Storage {
 
         match data {
             Some(mut data) => {
-                if self.password.is_some() {
-                    data = self.decrypt_data(data)?;
+                if let Some(dek) = &self.dek {
+                    data = dek.decrypt(&data)?;
                 }
 
                 let data_ret =
@@ -680,8 +680,8 @@ impl Storage {
             if !k.starts_with(prefix) {
                 break;
             }
-            let v = if self.password.is_some() {
-                self.decrypt_data(v.to_vec())?
+            let v = if let Some(dek) = &self.dek {
+                dek.decrypt(&v)?
             } else {
                 v.to_vec()
             };
@@ -793,35 +793,6 @@ impl Storage {
             self.global_transaction_is_active()
                 .then_some(GLOBAL_TRANSACTION_ID)
         })
-    }
-
-    fn encrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
-        let key: &[u8; 32] = self
-            .password
-            .as_ref()
-            .unwrap()
-            .as_slice()
-            .try_into()
-            .expect("DEK is always 32 bytes");
-        let mut nonce_seed = [0u8; 32];
-        SysRng.try_fill_bytes(&mut nonce_seed)?;
-        MiniCocoon::from_key(key, &nonce_seed)
-            .wrap(&data)
-            .map_err(|error| StorageError::FailedToEncryptData { error })
-    }
-
-    fn decrypt_data(&self, data: Vec<u8>) -> Result<Vec<u8>, StorageError> {
-        let key: &[u8; 32] = self
-            .password
-            .as_ref()
-            .unwrap()
-            .as_slice()
-            .try_into()
-            .expect("DEK is always 32 bytes");
-        // Nonce seed is not used during unwrap — the nonce is read from the ciphertext.
-        MiniCocoon::from_key(key, &[0u8; 32])
-            .unwrap(&data)
-            .map_err(|error| StorageError::FailedToDecryptData { error })
     }
 }
 
