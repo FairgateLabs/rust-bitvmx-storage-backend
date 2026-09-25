@@ -28,6 +28,8 @@ pub enum StorageError {
     WeakPassword(PasswordPolicy),
     #[error("Error generating random DEK: {0}")]
     RandomDekGenerationError(#[from] rand::rngs::SysError),
+    #[error("Invalid DEK length: expected 32 bytes, got {0}")]
+    InvalidDekLength(usize),
     #[error("Wrong password provided")]
     WrongPassword,
     #[error("No password set for the storage")]
