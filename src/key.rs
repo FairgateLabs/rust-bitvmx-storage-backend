@@ -57,6 +57,12 @@ fn validate_segment(part: &str) -> Result<(), StorageError> {
     Ok(())
 }
 
+impl AsRef<StorageKey> for StorageKey {
+    fn as_ref(&self) -> &StorageKey {
+        self
+    }
+}
+
 impl fmt::Display for StorageKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.joined())

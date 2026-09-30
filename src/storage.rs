@@ -34,7 +34,7 @@ pub struct Storage {
 pub trait KeyValueStore {
     fn get<V>(
         &self,
-        key: StorageKey,
+        key: impl AsRef<StorageKey>,
         transaction_id: Option<Uuid>,
     ) -> Result<Option<V>, StorageError>
     where
@@ -42,18 +42,22 @@ pub trait KeyValueStore {
 
     fn set<V>(
         &self,
-        key: StorageKey,
+        key: impl AsRef<StorageKey>,
         value: V,
         transaction_id: Option<Uuid>,
     ) -> Result<(), StorageError>
     where
         V: Serialize;
 
-    fn remove(&self, key: StorageKey, transaction_id: Option<Uuid>) -> Result<(), StorageError>;
+    fn remove(
+        &self,
+        key: impl AsRef<StorageKey>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<(), StorageError>;
 
     fn update<V>(
         &self,
-        key: StorageKey,
+        key: impl AsRef<StorageKey>,
         updates: &HashMap<&str, Value>,
         transaction_id: Option<Uuid>,
     ) -> Result<V, StorageError>
@@ -698,10 +702,10 @@ impl Storage {
 
     pub fn has_key(
         &self,
-        key: StorageKey,
+        key: impl AsRef<StorageKey>,
         transaction_id: Option<Uuid>,
     ) -> Result<bool, StorageError> {
-        let key = key.joined();
+        let key = key.as_ref().joined();
         let result = match self.effective_transaction_id(transaction_id) {
             Some(tx_id) => {
                 let map = self.transactions.borrow();
@@ -828,13 +832,13 @@ impl Storage {
 impl KeyValueStore for Storage {
     fn get<V>(
         &self,
-        key: StorageKey,
+        key: impl AsRef<StorageKey>,
         transaction_id: Option<Uuid>,
     ) -> Result<Option<V>, StorageError>
     where
         V: DeserializeOwned,
     {
-        let key = key.joined();
+        let key = key.as_ref().joined();
         let value = self.read(&key, self.effective_transaction_id(transaction_id))?;
 
         match value {
@@ -849,28 +853,32 @@ impl KeyValueStore for Storage {
 
     fn set<V>(
         &self,
-        key: StorageKey,
+        key: impl AsRef<StorageKey>,
         value: V,
         transaction_id: Option<Uuid>,
     ) -> Result<(), StorageError>
     where
         V: Serialize,
     {
-        let key = key.joined();
+        let key = key.as_ref().joined();
         let value = serde_json::to_string(&value).map_err(|_| StorageError::ConversionError)?;
 
         self.write(&key, &value, self.effective_transaction_id(transaction_id))
     }
 
-    fn remove(&self, key: StorageKey, transaction_id: Option<Uuid>) -> Result<(), StorageError> {
-        let key = key.joined();
+    fn remove(
+        &self,
+        key: impl AsRef<StorageKey>,
+        transaction_id: Option<Uuid>,
+    ) -> Result<(), StorageError> {
+        let key = key.as_ref().joined();
 
         self.delete(&key, self.effective_transaction_id(transaction_id))
     }
 
     fn update<V>(
         &self,
-        key: StorageKey,
+        key: impl AsRef<StorageKey>,
         updates: &HashMap<&str, Value>,
         transaction_id: Option<Uuid>,
     ) -> Result<V, StorageError>
@@ -878,7 +886,7 @@ impl KeyValueStore for Storage {
         V: Serialize + DeserializeOwned + Clone,
     {
         // 1. Fetch the existing value from the database
-        let value: Option<V> = self.get(key.clone(), transaction_id)?;
+        let value: Option<V> = self.get(key.as_ref(), transaction_id)?;
 
         if let Some(value) = value {
             // 2. Convert the existing value into a JSON object
@@ -1621,19 +1629,18 @@ mod tests {
         Ok(())
     }
 
-    // Test that StorageKey can be used directly with get/set/remove/has_key
-    // (via AsRef<str>) and with the partial_compare* prefix scans (via Deref).
+    // Test that StorageKey and &StorageKey can be used with get/set/remove/has_key.
     #[test]
     fn test_storage_key_works_with_get_set_and_partial_compare() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
 
         let key = StorageKey::new(["program", "123", "state"])?;
-        store.set(key.clone(), "running".to_string(), None)?;
+        store.set(&key, "running".to_string(), None)?;
         assert_eq!(
-            store.get::<String>(key.clone(), None)?,
+            store.get::<String>(&key, None)?,
             Some("running".to_string())
         );
-        assert!(store.has_key(key.clone(), None)?);
+        assert!(store.has_key(&key, None)?);
 
         let scan_key = StorageKey::new(["program", "123"])?;
         assert_eq!(
@@ -1641,7 +1648,7 @@ mod tests {
             vec![("program/123/state".to_string(), "\"running\"".to_string())]
         );
 
-        store.remove(key.clone(), None)?;
+        store.remove(&key, None)?;
         assert!(!store.has_key(key, None)?);
 
         Storage::delete_db_files(store)?;
