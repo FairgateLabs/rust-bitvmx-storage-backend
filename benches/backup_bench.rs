@@ -4,6 +4,7 @@ use redact::Secret;
 use std::{env, fs, path::PathBuf};
 use storage_backend::{
     error::StorageError,
+    key::StorageKey,
     storage::{KeyValueStore, Storage},
     storage_config::StorageConfig,
 };
@@ -38,7 +39,11 @@ fn write_db(storage: &Storage, number_of_items: usize) {
     let tx = storage.begin_transaction();
     for i in 0..number_of_items {
         storage
-            .set(format!("key_{}", i), format!("value_{}", i), Some(tx))
+            .set(
+                StorageKey::new([format!("key_{}", i)]).unwrap(),
+                format!("value_{}", i),
+                Some(tx),
+            )
             .unwrap();
     }
     storage.commit_transaction(tx).unwrap();
