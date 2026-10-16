@@ -29,6 +29,8 @@ pub struct Storage {
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
     dek: Option<Dek>,
     password_policy: PasswordPolicy,
+    // Used by writes made outside a transaction.
+    write_options: WriteOptions,
 }
 
 pub trait KeyValueStore {
@@ -121,6 +123,9 @@ impl Storage {
             config.path.as_str(),
         )?;
 
+        let mut write_options = WriteOptions::default();
+        write_options.set_sync(config.sync_writes);
+
         let password_policy = if let Some(ref policy) = password_policy_config {
             PasswordPolicy::new(policy.clone())
         } else {
@@ -151,7 +156,7 @@ impl Storage {
                         .dump(dek.as_bytes().to_vec(), &mut entry_cursor)
                         .map_err(|error| StorageError::FailedToEncryptData { error })?;
                     let encrypted_dek = entry_cursor.into_inner();
-                    db.put(DEK_KEY.as_bytes(), encrypted_dek)
+                    db.put_opt(DEK_KEY.as_bytes(), encrypted_dek, &write_options)
                         .map_err(|_| StorageError::WriteError)?;
                     dek
                 }
@@ -167,6 +172,7 @@ impl Storage {
             transactions: RefCell::new(HashMap::new()),
             dek,
             password_policy,
+            write_options,
         })
     }
 
@@ -204,7 +210,7 @@ impl Storage {
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
         let encrypted_dek = entry_cursor.into_inner();
         self.db
-            .put(DEK_KEY.as_bytes(), encrypted_dek)
+            .put_opt(DEK_KEY.as_bytes(), encrypted_dek, &self.write_options)
             .map_err(|_| StorageError::WriteError)?;
 
         Ok(())
@@ -380,7 +386,7 @@ impl Storage {
             }
             None => {
                 self.db
-                    .delete(key.as_bytes())
+                    .delete_opt(key.as_bytes(), &self.write_options)
                     .map_err(|_| StorageError::WriteError)?;
             }
         }
@@ -411,7 +417,7 @@ impl Storage {
             }
             None => {
                 self.db
-                    .put(key.as_bytes(), data)
+                    .put_opt(key.as_bytes(), data, &self.write_options)
                     .map_err(|_| StorageError::WriteError)?;
             }
         }
@@ -940,10 +946,10 @@ mod tests {
             None
         };
 
-        let config = StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            password: password.map(|p| Secret::from(p)),
-        };
+        let config = StorageConfig::new(
+            path.to_string_lossy().to_string(),
+            password.map(|p| Secret::from(p)),
+        );
 
         let storage = Storage::new_with_policy(
             &config,
@@ -1217,10 +1223,10 @@ mod tests {
     fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
 
-        let config = StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            password: Some(Secret::from("password")),
-        };
+        let config = StorageConfig::new(
+            path.to_string_lossy().to_string(),
+            Some(Secret::from("password")),
+        );
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());
         Ok(())
@@ -1437,10 +1443,10 @@ mod tests {
 
         // Open with new password and verify data is accessible
         let store = Storage::new_with_policy(
-            &StorageConfig {
-                path: path.to_string_lossy().to_string(),
-                password: Some(Secret::from("new_password")),
-            },
+            &StorageConfig::new(
+                path.to_string_lossy().to_string(),
+                Some(Secret::from("new_password")),
+            ),
             Some(PasswordPolicyConfig {
                 min_length: 1,
                 min_number_of_special_chars: 0,
@@ -1688,6 +1694,116 @@ mod tests {
 
         let store = Storage::new(&config)?;
         assert_eq!(store.read("test1", None)?.is_some(), false);
+        Ok(())
+    }
+
+    // Helper: create a storage with the given sync_writes setting, optionally encrypted.
+    // Also returns the options it was opened with, which collect RocksDB statistics.
+    fn create_storage_with_sync(
+        sync_writes: bool,
+        is_encrypted: bool,
+    ) -> Result<(Storage, rocksdb::Options), StorageError> {
+        let config = StorageConfig::new(
+            temp_storage().to_string_lossy().to_string(),
+            is_encrypted.then(|| Secret::from("password".to_string())),
+        )
+        .with_sync_writes(sync_writes);
+        let mut options = create_options();
+        options.create_if_missing(true);
+        options.enable_statistics();
+        let policy = PasswordPolicyConfig {
+            min_length: 1,
+            min_number_of_special_chars: 0,
+            min_number_of_uppercase: 0,
+            min_number_of_digits: 0,
+        };
+        let storage = Storage::open_db(&config, Some(policy), &options)?;
+        Ok((storage, options))
+    }
+
+    // Helper: how many times RocksDB has synced the WAL to disk for the storage opened with options.
+    fn wal_syncs(options: &rocksdb::Options) -> u64 {
+        options.get_ticker_count(rocksdb::statistics::Ticker::WalFileSynced)
+    }
+
+    // sync_writes is off unless set, both from a file and from new().
+    #[test]
+    fn test_sync_writes_defaults_to_false() {
+        let config: StorageConfig = serde_json::from_str(r#"{"path": "some/path"}"#).unwrap();
+        assert!(!config.sync_writes);
+        assert!(!StorageConfig::new("some/path".to_string(), None).sync_writes);
+    }
+
+    // Without sync_writes, writes outside a transaction do not wait for the disk.
+    #[test]
+    fn test_direct_writes_do_not_sync_by_default() -> Result<(), StorageError> {
+        let (store, options) = create_storage_with_sync(false, false)?;
+        let before = wal_syncs(&options);
+
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        store.remove(StorageKey::try_from("test1")?, None)?;
+
+        assert_eq!(wal_syncs(&options), before);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // With sync_writes, every write and delete outside a transaction syncs the WAL.
+    #[test]
+    fn test_sync_writes_syncs_each_direct_write() -> Result<(), StorageError> {
+        let (store, options) = create_storage_with_sync(true, false)?;
+        let before = wal_syncs(&options);
+
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        store.set(StorageKey::try_from("test2")?, "test_value2", None)?;
+        store.remove(StorageKey::try_from("test1")?, None)?;
+
+        assert_eq!(wal_syncs(&options), before + 3);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // With sync_writes, the DEK written when an encrypted storage is created is synced too.
+    #[test]
+    fn test_sync_writes_syncs_dek_on_creation() -> Result<(), StorageError> {
+        let (unsynced, unsynced_options) = create_storage_with_sync(false, true)?;
+        let (synced, synced_options) = create_storage_with_sync(true, true)?;
+
+        assert_eq!(wal_syncs(&synced_options), wal_syncs(&unsynced_options) + 1);
+        Storage::delete_db_files(unsynced)?;
+        Storage::delete_db_files(synced)?;
+        Ok(())
+    }
+
+    // With sync_writes, the DEK rewritten by change_password is synced.
+    #[test]
+    fn test_sync_writes_syncs_change_password() -> Result<(), StorageError> {
+        let (store, options) = create_storage_with_sync(true, true)?;
+        let before = wal_syncs(&options);
+
+        store.change_password(Secret::from("password"), Secret::from("new_password"))?;
+
+        assert_eq!(wal_syncs(&options), before + 1);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Transaction commits sync whether or not sync_writes is set.
+    #[test]
+    fn test_transaction_commit_syncs_without_sync_writes() -> Result<(), StorageError> {
+        let (store, options) = create_storage_with_sync(false, false)?;
+        let before = wal_syncs(&options);
+
+        let transaction_id = store.begin_transaction();
+        store.set(
+            StorageKey::try_from("test1")?,
+            "test_value1",
+            Some(transaction_id),
+        )?;
+        store.commit_transaction(transaction_id)?;
+
+        assert_eq!(wal_syncs(&options), before + 1);
+        Storage::delete_db_files(store)?;
         Ok(())
     }
 }
