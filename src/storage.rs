@@ -29,6 +29,8 @@ pub struct Storage {
     transactions: RefCell<HashMap<Uuid, Box<rocksdb::Transaction<'static, TransactionDB>>>>,
     dek: Option<Dek>,
     password_policy: PasswordPolicy,
+    // Used by writes made outside a transaction.
+    write_options: WriteOptions,
 }
 
 pub trait KeyValueStore {
@@ -104,10 +106,24 @@ impl Storage {
 
     /// Repairs a RocksDB database at `path`.
     ///
-    /// The database must not be open while it is being repaired.
-    pub fn repair<P: AsRef<Path>>(path: P) -> Result<(), StorageError> {
+    /// The database must not be open while it is being repaired, and `path` must exist.
+    /// Repair succeeds even when it has to drop data, so check the report for files it could
+    /// not recover.
+    pub fn repair<P: AsRef<Path>>(path: P) -> Result<RepairReport, StorageError> {
+        let path = path.as_ref();
+        if !path.is_dir() {
+            return Err(StorageError::IoError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{} is not a database directory", path.display()),
+            )));
+        }
+        let lost_before = lost_files(path);
         rocksdb::TransactionDB::<rocksdb::SingleThreaded>::repair(&create_options(), path)?;
-        Ok(())
+        let lost_files = lost_files(path)
+            .into_iter()
+            .filter(|file| !lost_before.contains(file))
+            .collect();
+        Ok(RepairReport { lost_files })
     }
 
     fn open_db(
@@ -115,11 +131,16 @@ impl Storage {
         password_policy_config: Option<PasswordPolicyConfig>,
         options: &rocksdb::Options,
     ) -> Result<Storage, StorageError> {
+        check_current_file(Path::new(&config.path))?;
+
         let db = rocksdb::TransactionDB::open(
             options,
             &rocksdb::TransactionDBOptions::default(),
             config.path.as_str(),
         )?;
+
+        let mut write_options = WriteOptions::default();
+        write_options.set_sync(config.sync_writes);
 
         let password_policy = if let Some(ref policy) = password_policy_config {
             PasswordPolicy::new(policy.clone())
@@ -131,7 +152,10 @@ impl Storage {
             if !password_policy.is_valid(password.expose_secret()) {
                 return Err(StorageError::WeakPassword(password_policy));
             }
-            let dek = match db.get(DEK_KEY).map_err(|_| StorageError::ReadError)? {
+            let dek = match db
+                .get(DEK_KEY)
+                .map_err(|e| StorageError::ReadError(e.to_string()))?
+            {
                 Some(encrypted_dek) => {
                     let mut entry_cursor = Cursor::new(encrypted_dek);
 
@@ -151,7 +175,7 @@ impl Storage {
                         .dump(dek.as_bytes().to_vec(), &mut entry_cursor)
                         .map_err(|error| StorageError::FailedToEncryptData { error })?;
                     let encrypted_dek = entry_cursor.into_inner();
-                    db.put(DEK_KEY.as_bytes(), encrypted_dek)
+                    db.put_opt(DEK_KEY.as_bytes(), encrypted_dek, &write_options)
                         .map_err(|_| StorageError::WriteError)?;
                     dek
                 }
@@ -167,6 +191,7 @@ impl Storage {
             transactions: RefCell::new(HashMap::new()),
             dek,
             password_policy,
+            write_options,
         })
     }
 
@@ -184,7 +209,11 @@ impl Storage {
             None => return Err(StorageError::NoPasswordSet),
         }
 
-        let dek = match self.db.get(DEK_KEY).map_err(|_| StorageError::ReadError)? {
+        let dek = match self
+            .db
+            .get(DEK_KEY)
+            .map_err(|e| StorageError::ReadError(e.to_string()))?
+        {
             Some(encrypted_dek) => {
                 let mut entry_cursor = Cursor::new(encrypted_dek);
 
@@ -204,7 +233,7 @@ impl Storage {
             .map_err(|error| StorageError::FailedToEncryptData { error })?;
         let encrypted_dek = entry_cursor.into_inner();
         self.db
-            .put(DEK_KEY.as_bytes(), encrypted_dek)
+            .put_opt(DEK_KEY.as_bytes(), encrypted_dek, &self.write_options)
             .map_err(|_| StorageError::WriteError)?;
 
         Ok(())
@@ -310,7 +339,7 @@ impl Storage {
         }
 
         let snapshot = self.db.snapshot();
-        let mut iter = snapshot.iterator(rocksdb::IteratorMode::Start);
+        let iter = snapshot.iterator(rocksdb::IteratorMode::Start);
         let backup_file = File::create(backup_path)?;
         let mut dek_file = File::create(dek_path)?;
         let mut data_vec = Vec::new();
@@ -328,7 +357,8 @@ impl Storage {
 
         let mut backup_writer = BackupFileWriter::new(backup_file, &dek)?;
 
-        while let Some(Ok((k, v))) = iter.next() {
+        for item in iter {
+            let (k, v) = item.map_err(|e| StorageError::ReadError(e.to_string()))?;
             data_vec.push((k.to_vec(), v.to_vec()));
 
             if item_counter == 1000 {
@@ -380,7 +410,7 @@ impl Storage {
             }
             None => {
                 self.db
-                    .delete(key.as_bytes())
+                    .delete_opt(key.as_bytes(), &self.write_options)
                     .map_err(|_| StorageError::WriteError)?;
             }
         }
@@ -411,7 +441,7 @@ impl Storage {
             }
             None => {
                 self.db
-                    .put(key.as_bytes(), data)
+                    .put_opt(key.as_bytes(), data, &self.write_options)
                     .map_err(|_| StorageError::WriteError)?;
             }
         }
@@ -431,12 +461,12 @@ impl Storage {
                     .get(&tx_id)
                     .ok_or(StorageError::NotFound("Transaction".to_string()))?;
                 tx.get(key.as_bytes())
-                    .map_err(|_| StorageError::ReadError)?
+                    .map_err(|e| StorageError::ReadError(e.to_string()))?
             }
             None => self
                 .db
                 .get(key.as_bytes())
-                .map_err(|_| StorageError::ReadError)?,
+                .map_err(|e| StorageError::ReadError(e.to_string()))?,
         };
 
         match data {
@@ -460,14 +490,19 @@ impl Storage {
                 let tx = map
                     .get(&tx_id)
                     .ok_or(StorageError::NotFound("Transaction".to_string()))?;
-                let result = tx.iterator(rocksdb::IteratorMode::Start).next().is_none();
-                Ok(result)
+                let first = tx.iterator(rocksdb::IteratorMode::Start).next();
+                Ok(first
+                    .transpose()
+                    .map_err(|e| StorageError::ReadError(e.to_string()))?
+                    .is_none())
             }
-            None => Ok(self
-                .db
-                .iterator(rocksdb::IteratorMode::Start)
-                .next()
-                .is_none()),
+            None => {
+                let first = self.db.iterator(rocksdb::IteratorMode::Start).next();
+                Ok(first
+                    .transpose()
+                    .map_err(|e| StorageError::ReadError(e.to_string()))?
+                    .is_none())
+            }
         }
     }
 
@@ -611,7 +646,7 @@ impl Storage {
 
     fn collect_keys<I>(
         &self,
-        mut iter: I,
+        iter: I,
         key: Option<&str>,
         limit: Option<usize>,
         result: &mut Vec<String>,
@@ -623,7 +658,8 @@ impl Storage {
             return Ok(());
         }
 
-        while let Some(Ok((k, _))) = iter.next() {
+        for item in iter {
+            let (k, _) = item.map_err(|e| StorageError::ReadError(e.to_string()))?;
             let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
             if let Some(prefix) = key {
                 if !k.starts_with(prefix) {
@@ -675,7 +711,7 @@ impl Storage {
 
     fn collect_entries<I>(
         &self,
-        mut iter: I,
+        iter: I,
         prefix: &str,
         limit: Option<usize>,
         result: &mut Vec<(String, String)>,
@@ -687,7 +723,8 @@ impl Storage {
             return Ok(());
         }
 
-        while let Some(Ok((k, v))) = iter.next() {
+        for item in iter {
+            let (k, v) = item.map_err(|e| StorageError::ReadError(e.to_string()))?;
             let k = String::from_utf8(k.to_vec()).map_err(|_| StorageError::ConversionError)?;
             if !k.starts_with(prefix) {
                 break;
@@ -721,12 +758,12 @@ impl Storage {
                     .get(&tx_id)
                     .ok_or(StorageError::NotFound("Transaction".to_string()))?;
                 tx.get(key.as_bytes())
-                    .map_err(|_| StorageError::ReadError)?
+                    .map_err(|e| StorageError::ReadError(e.to_string()))?
             }
             None => self
                 .db
                 .get(key.as_bytes())
-                .map_err(|_| StorageError::ReadError)?,
+                .map_err(|e| StorageError::ReadError(e.to_string()))?,
         };
 
         Ok(result.is_some())
@@ -895,8 +932,49 @@ impl KeyValueStore for Storage {
     }
 }
 
+/// What a repair could not recover.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepairReport {
+    /// SST files that repair could not read and moved to the `lost` directory during this run.
+    pub lost_files: Vec<PathBuf>,
+}
+
+// Repair moves the SST files it cannot read to `lost`. Other files there are not losses: a
+// MANIFEST is replaced by a rebuilt one and a WAL is archived once converted to an SST, so
+// damage inside a WAL does not show up here.
+fn lost_files(path: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(path.join("lost")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|file| file.extension().is_some_and(|ext| ext == "sst"))
+        .collect()
+}
+
 fn create_options() -> rocksdb::Options {
     rocksdb::Options::default()
+}
+
+// A directory with data files but no CURRENT is a damaged database. Opening it with
+// create_if_missing would either fail with an unrelated message or start a new empty database.
+fn check_current_file(path: &Path) -> Result<(), StorageError> {
+    if path.join("CURRENT").exists() {
+        return Ok(());
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return Ok(());
+    };
+    let has_data_files = entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        name.starts_with("MANIFEST-") || name.ends_with(".sst") || name.ends_with(".log")
+    });
+    if has_data_files {
+        return Err(StorageError::MissingCurrent(path.display().to_string()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -940,10 +1018,10 @@ mod tests {
             None
         };
 
-        let config = StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            password: password.map(|p| Secret::from(p)),
-        };
+        let config = StorageConfig::new(
+            path.to_string_lossy().to_string(),
+            password.map(|p| Secret::from(p)),
+        );
 
         let storage = Storage::new_with_policy(
             &config,
@@ -1217,10 +1295,10 @@ mod tests {
     fn test_open_inexistent_storage() -> Result<(), StorageError> {
         let path = &temp_storage();
 
-        let config = StorageConfig {
-            path: path.to_string_lossy().to_string(),
-            password: Some(Secret::from("password")),
-        };
+        let config = StorageConfig::new(
+            path.to_string_lossy().to_string(),
+            Some(Secret::from("password")),
+        );
         let open_store = Storage::open(&config);
         assert!(open_store.is_err());
         Ok(())
@@ -1437,10 +1515,10 @@ mod tests {
 
         // Open with new password and verify data is accessible
         let store = Storage::new_with_policy(
-            &StorageConfig {
-                path: path.to_string_lossy().to_string(),
-                password: Some(Secret::from("new_password")),
-            },
+            &StorageConfig::new(
+                path.to_string_lossy().to_string(),
+                Some(Secret::from("new_password")),
+            ),
             Some(PasswordPolicyConfig {
                 min_length: 1,
                 min_number_of_special_chars: 0,
@@ -1688,6 +1766,390 @@ mod tests {
 
         let store = Storage::new(&config)?;
         assert_eq!(store.read("test1", None)?.is_some(), false);
+        Ok(())
+    }
+
+    // Helper: create a storage with the given sync_writes setting, optionally encrypted.
+    // Also returns the options it was opened with, which collect RocksDB statistics.
+    fn create_storage_with_sync(
+        sync_writes: bool,
+        is_encrypted: bool,
+    ) -> Result<(Storage, rocksdb::Options), StorageError> {
+        let config = StorageConfig::new(
+            temp_storage().to_string_lossy().to_string(),
+            is_encrypted.then(|| Secret::from("password".to_string())),
+        )
+        .with_sync_writes(sync_writes);
+        let mut options = create_options();
+        options.create_if_missing(true);
+        options.enable_statistics();
+        let policy = PasswordPolicyConfig {
+            min_length: 1,
+            min_number_of_special_chars: 0,
+            min_number_of_uppercase: 0,
+            min_number_of_digits: 0,
+        };
+        let storage = Storage::open_db(&config, Some(policy), &options)?;
+        Ok((storage, options))
+    }
+
+    // Helper: how many times RocksDB has synced the WAL to disk for the storage opened with options.
+    fn wal_syncs(options: &rocksdb::Options) -> u64 {
+        options.get_ticker_count(rocksdb::statistics::Ticker::WalFileSynced)
+    }
+
+    // sync_writes is off unless set, both from a file and from new().
+    #[test]
+    fn test_sync_writes_defaults_to_false() {
+        let config: StorageConfig = serde_json::from_str(r#"{"path": "some/path"}"#).unwrap();
+        assert!(!config.sync_writes);
+        assert!(!StorageConfig::new("some/path".to_string(), None).sync_writes);
+    }
+
+    // Without sync_writes, writes outside a transaction do not wait for the disk.
+    #[test]
+    fn test_direct_writes_do_not_sync_by_default() -> Result<(), StorageError> {
+        let (store, options) = create_storage_with_sync(false, false)?;
+        let before = wal_syncs(&options);
+
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        store.remove(StorageKey::try_from("test1")?, None)?;
+
+        assert_eq!(wal_syncs(&options), before);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // With sync_writes, every write and delete outside a transaction syncs the WAL.
+    #[test]
+    fn test_sync_writes_syncs_each_direct_write() -> Result<(), StorageError> {
+        let (store, options) = create_storage_with_sync(true, false)?;
+        let before = wal_syncs(&options);
+
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        store.set(StorageKey::try_from("test2")?, "test_value2", None)?;
+        store.remove(StorageKey::try_from("test1")?, None)?;
+
+        assert_eq!(wal_syncs(&options), before + 3);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // With sync_writes, the DEK written when an encrypted storage is created is synced too.
+    #[test]
+    fn test_sync_writes_syncs_dek_on_creation() -> Result<(), StorageError> {
+        let (unsynced, unsynced_options) = create_storage_with_sync(false, true)?;
+        let (synced, synced_options) = create_storage_with_sync(true, true)?;
+
+        assert_eq!(wal_syncs(&synced_options), wal_syncs(&unsynced_options) + 1);
+        Storage::delete_db_files(unsynced)?;
+        Storage::delete_db_files(synced)?;
+        Ok(())
+    }
+
+    // With sync_writes, the DEK rewritten by change_password is synced.
+    #[test]
+    fn test_sync_writes_syncs_change_password() -> Result<(), StorageError> {
+        let (store, options) = create_storage_with_sync(true, true)?;
+        let before = wal_syncs(&options);
+
+        store.change_password(Secret::from("password"), Secret::from("new_password"))?;
+
+        assert_eq!(wal_syncs(&options), before + 1);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Transaction commits sync whether or not sync_writes is set.
+    #[test]
+    fn test_transaction_commit_syncs_without_sync_writes() -> Result<(), StorageError> {
+        let (store, options) = create_storage_with_sync(false, false)?;
+        let before = wal_syncs(&options);
+
+        let transaction_id = store.begin_transaction();
+        store.set(
+            StorageKey::try_from("test1")?,
+            "test_value1",
+            Some(transaction_id),
+        )?;
+        store.commit_transaction(transaction_id)?;
+
+        assert_eq!(wal_syncs(&options), before + 1);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Writes entries, flushes them to an SST file and damages that file's first data block.
+    // Returns the config to reopen the storage.
+    fn create_storage_with_corrupted_sst() -> Result<StorageConfig, StorageError> {
+        let (path, config, store) = create_path_and_storage(false)?;
+        for i in 0..3 {
+            store.write(&format!("key{i}"), "test_value", None)?;
+        }
+        drop(store);
+        // Reopening with a plain DB replays the WAL and flushes it to an SST file.
+        let db = rocksdb::DB::open_default(&path)?;
+        db.flush()?;
+        drop(db);
+
+        let sst = fs::read_dir(&path)?
+            .map(|entry| entry.map(|e| e.path()))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .find(|p| p.extension().is_some_and(|ext| ext == "sst"))
+            .expect("flush should have created an SST file");
+        let mut bytes = fs::read(&sst)?;
+        for byte in &mut bytes[8..16] {
+            *byte ^= 0xFF;
+        }
+        fs::write(&sst, bytes)?;
+
+        Ok(config)
+    }
+
+    fn assert_read_error<T: std::fmt::Debug>(result: Result<T, StorageError>) {
+        match result {
+            Err(StorageError::ReadError(message)) => assert!(
+                message.contains("Corruption"),
+                "RocksDB message should be kept, got: {message}"
+            ),
+            other => panic!("expected ReadError, got {other:?}"),
+        }
+    }
+
+    // A damaged block surfaces as a read error that keeps the RocksDB message.
+    #[test]
+    fn test_read_error_keeps_rocksdb_message() -> Result<(), StorageError> {
+        let store = Storage::open(&create_storage_with_corrupted_sst()?)?;
+
+        assert_read_error(store.read("key0", None));
+        assert_read_error(store.has_key(StorageKey::try_from("key0")?, None));
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Listings return the iterator error instead of stopping at the damaged block.
+    #[test]
+    fn test_listings_return_iterator_errors() -> Result<(), StorageError> {
+        let store = Storage::open(&create_storage_with_corrupted_sst()?)?;
+
+        assert_read_error(store.keys(None));
+        assert_read_error(store.partial_compare_keys("key", None));
+        assert_read_error(store.partial_compare("key", None));
+        assert_read_error(store.is_empty(None));
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // A backup of a damaged database fails instead of writing a truncated file.
+    #[test]
+    fn test_backup_fails_on_iterator_error() -> Result<(), StorageError> {
+        let store = Storage::open(&create_storage_with_corrupted_sst()?)?;
+        let (backup_path, dek_path) = temp_backup();
+
+        assert_read_error(store.backup(&backup_path, &dek_path, Secret::from("ABC123!!!abcdef")));
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Writes a key and flushes it to an SST file, so the data does not depend on the WAL.
+    fn create_flushed_storage() -> Result<(PathBuf, StorageConfig), StorageError> {
+        let (path, config, store) = create_path_and_storage(false)?;
+        store.write("key0", "test_value", None)?;
+        drop(store);
+        let db = rocksdb::DB::open_default(&path)?;
+        db.flush()?;
+        drop(db);
+        Ok((path, config))
+    }
+
+    fn assert_missing_current(result: Result<Storage, StorageError>) {
+        match result.err() {
+            Some(StorageError::MissingCurrent(_)) => {}
+            other => panic!("expected MissingCurrent, got {other:?}"),
+        }
+    }
+
+    // Both opening and creating report the missing CURRENT, with the WAL still around.
+    #[test]
+    fn test_missing_current_is_reported() -> Result<(), StorageError> {
+        let (path, config) = create_flushed_storage()?;
+        fs::remove_file(path.join("CURRENT"))?;
+
+        assert_missing_current(Storage::open(&config));
+        assert_missing_current(Storage::new(&config));
+        fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    // With only SST files left, creating must not start a new empty database over them.
+    #[test]
+    fn test_missing_current_with_only_sst_files_is_reported() -> Result<(), StorageError> {
+        let (path, config) = create_flushed_storage()?;
+        for entry in fs::read_dir(&path)?.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "CURRENT" || name.starts_with("MANIFEST-") || name.ends_with(".log") {
+                fs::remove_file(entry.path())?;
+            }
+        }
+
+        assert_missing_current(Storage::new(&config));
+        fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    // An existing directory without database files is not a damaged database.
+    #[test]
+    fn test_new_storage_in_empty_directory() -> Result<(), StorageError> {
+        let path = temp_storage();
+        fs::create_dir_all(&path)?;
+        let config = StorageConfig::new(path.to_string_lossy().to_string(), None);
+
+        let store = Storage::new(&config)?;
+        assert!(store.is_empty(None)?);
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Repair rebuilds the missing CURRENT and keeps the data.
+    #[test]
+    fn test_repair_recovers_missing_current() -> Result<(), StorageError> {
+        let (path, config) = create_flushed_storage()?;
+        fs::remove_file(path.join("CURRENT"))?;
+
+        Storage::repair(&path)?;
+
+        let store = Storage::open(&config)?;
+        assert_eq!(store.read("key0", None)?, Some("test_value".to_string()));
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Repair of a healthy database keeps its data and reports nothing lost.
+    #[test]
+    fn test_repair_report_is_empty_for_healthy_database() -> Result<(), StorageError> {
+        let (path, config) = create_flushed_storage()?;
+
+        let report = Storage::repair(&path)?;
+
+        assert!(report.lost_files.is_empty());
+        let store = Storage::open(&config)?;
+        assert_eq!(store.read("key0", None)?, Some("test_value".to_string()));
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Repair succeeds on a damaged SST but the report lists the file it had to drop.
+    #[test]
+    fn test_repair_report_lists_lost_sst() -> Result<(), StorageError> {
+        let config = create_storage_with_corrupted_sst()?;
+        let path = PathBuf::from(&config.path);
+
+        let report = Storage::repair(&path)?;
+
+        assert!(!report.lost_files.is_empty());
+        assert!(report
+            .lost_files
+            .iter()
+            .any(|file| file.extension().is_some_and(|ext| ext == "sst")));
+        assert!(report
+            .lost_files
+            .iter()
+            .all(|file| file.starts_with(path.join("lost"))));
+        fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    // Files left in `lost` by an earlier repair are not reported again.
+    #[test]
+    fn test_repair_report_only_lists_files_lost_in_this_run() -> Result<(), StorageError> {
+        let config = create_storage_with_corrupted_sst()?;
+        let path = PathBuf::from(&config.path);
+        assert!(!Storage::repair(&path)?.lost_files.is_empty());
+
+        let report = Storage::repair(&path)?;
+
+        assert!(report.lost_files.is_empty());
+        fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    // Repair must not create a database at a path that does not exist.
+    #[test]
+    fn test_repair_fails_for_missing_path() {
+        let path = temp_storage();
+
+        assert!(matches!(
+            Storage::repair(&path),
+            Err(StorageError::IoError(_))
+        ));
+        assert!(!path.exists());
+    }
+
+    type Damage = fn(&Path);
+
+    fn manifest_file(path: &Path) -> PathBuf {
+        fs::read_dir(path)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|file| {
+                file.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("MANIFEST-"))
+            })
+            .expect("database should have a MANIFEST")
+    }
+
+    // Damage to CURRENT or the MANIFEST is reported when opening, and repair rebuilds both
+    // from the SST files without losing data.
+    #[test]
+    fn test_damaged_metadata_fails_to_open_and_repair_recovers() -> Result<(), StorageError> {
+        let damages: Vec<(&str, Damage)> = vec![
+            ("empty CURRENT", |p| {
+                fs::write(p.join("CURRENT"), "").unwrap()
+            }),
+            ("garbage CURRENT", |p| {
+                fs::write(p.join("CURRENT"), "garbage\n").unwrap()
+            }),
+            ("CURRENT without MANIFEST", |p| {
+                fs::write(p.join("CURRENT"), "MANIFEST-999999\n").unwrap()
+            }),
+            ("deleted MANIFEST", |p| {
+                fs::remove_file(manifest_file(p)).unwrap()
+            }),
+            ("corrupted MANIFEST", |p| {
+                let manifest = manifest_file(p);
+                let mut bytes = fs::read(&manifest).unwrap();
+                for byte in &mut bytes[8..40] {
+                    *byte ^= 0xFF;
+                }
+                fs::write(manifest, bytes).unwrap();
+            }),
+        ];
+
+        for (name, damage) in damages {
+            let (path, config) = create_flushed_storage()?;
+            damage(&path);
+
+            assert!(
+                matches!(
+                    Storage::open(&config).err(),
+                    Some(StorageError::CreationError(_))
+                ),
+                "{name}: opening should fail"
+            );
+            assert!(
+                Storage::repair(&path)?.lost_files.is_empty(),
+                "{name}: nothing is lost"
+            );
+            let store = Storage::open(&config)?;
+            assert_eq!(
+                store.read("key0", None)?,
+                Some("test_value".to_string()),
+                "{name}: data should survive repair"
+            );
+            Storage::delete_db_files(store)?;
+        }
         Ok(())
     }
 }
