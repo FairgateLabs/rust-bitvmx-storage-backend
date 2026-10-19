@@ -13,9 +13,13 @@ pub struct PasswordPolicyConfig {
 pub struct StorageConfig {
     pub path: String,
     pub password: Option<Secret<String>>,
-    /// Fsync writes made outside a transaction (commits always sync).
-    #[serde(default)]
+    /// Fsync every write, including transaction commits.
+    #[serde(default = "default_sync_writes")]
     pub sync_writes: bool,
+}
+
+fn default_sync_writes() -> bool {
+    true
 }
 
 impl StorageConfig {
@@ -23,12 +27,12 @@ impl StorageConfig {
         Self {
             path,
             password,
-            sync_writes: false,
+            sync_writes: default_sync_writes(),
         }
     }
 
-    pub fn with_sync_writes(mut self, sync_writes: bool) -> Self {
-        self.sync_writes = sync_writes;
+    pub fn without_sync_writes(mut self) -> Self {
+        self.sync_writes = false;
         self
     }
 }

@@ -196,13 +196,13 @@ To use the `Storage` struct for managing a key-value store, follow these steps:
 
 ## Durability
 
-A transaction commit is always fsynced. Writes made outside a transaction are fsynced only when `sync_writes` is set in the `StorageConfig`:
+Every write is fsynced, including transaction commits. Writes inside a transaction are synced once, when it commits. To skip the fsync, turn `sync_writes` off in the `StorageConfig`:
 
 ```rust
-let config = StorageConfig::new("path/to/database".to_string(), None).with_sync_writes(true);
+let config = StorageConfig::new("path/to/database".to_string(), None).without_sync_writes();
 ```
 
-`sync_writes` defaults to `false`. Without it, a write outside a transaction can be lost if the machine crashes before the operating system flushes it to disk.
+With `sync_writes` off, a write can be lost if the machine crashes before the operating system flushes it to disk.
 
 ## Repairing a damaged database
 

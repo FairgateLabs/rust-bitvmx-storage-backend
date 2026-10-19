@@ -31,6 +31,7 @@ pub struct Storage {
     password_policy: PasswordPolicy,
     // Used by writes made outside a transaction.
     write_options: WriteOptions,
+    sync_writes: bool,
 }
 
 pub trait KeyValueStore {
@@ -192,6 +193,7 @@ impl Storage {
             dek,
             password_policy,
             write_options,
+            sync_writes: config.sync_writes,
         })
     }
 
@@ -816,7 +818,7 @@ impl Storage {
 
     fn create_transaction(&self, transaction_id: Uuid) {
         let mut write_options = WriteOptions::default();
-        write_options.set_sync(true);
+        write_options.set_sync(self.sync_writes);
 
         let transaction = self.db.transaction_opt(&write_options, &Default::default());
         let mut map = self.transactions.borrow_mut();
@@ -1775,11 +1777,11 @@ mod tests {
         sync_writes: bool,
         is_encrypted: bool,
     ) -> Result<(Storage, rocksdb::Options), StorageError> {
-        let config = StorageConfig::new(
+        let mut config = StorageConfig::new(
             temp_storage().to_string_lossy().to_string(),
             is_encrypted.then(|| Secret::from("password".to_string())),
-        )
-        .with_sync_writes(sync_writes);
+        );
+        config.sync_writes = sync_writes;
         let mut options = create_options();
         options.create_if_missing(true);
         options.enable_statistics();
@@ -1798,17 +1800,17 @@ mod tests {
         options.get_ticker_count(rocksdb::statistics::Ticker::WalFileSynced)
     }
 
-    // sync_writes is off unless set, both from a file and from new().
+    // sync_writes is on unless turned off, both from a file and from new().
     #[test]
-    fn test_sync_writes_defaults_to_false() {
+    fn test_sync_writes_defaults_to_true() {
         let config: StorageConfig = serde_json::from_str(r#"{"path": "some/path"}"#).unwrap();
-        assert!(!config.sync_writes);
-        assert!(!StorageConfig::new("some/path".to_string(), None).sync_writes);
+        assert!(config.sync_writes);
+        assert!(StorageConfig::new("some/path".to_string(), None).sync_writes);
     }
 
-    // Without sync_writes, writes outside a transaction do not wait for the disk.
+    // With sync_writes off, writes outside a transaction do not wait for the disk.
     #[test]
-    fn test_direct_writes_do_not_sync_by_default() -> Result<(), StorageError> {
+    fn test_direct_writes_do_not_sync_when_disabled() -> Result<(), StorageError> {
         let (store, options) = create_storage_with_sync(false, false)?;
         let before = wal_syncs(&options);
 
@@ -1860,22 +1862,43 @@ mod tests {
         Ok(())
     }
 
-    // Transaction commits sync whether or not sync_writes is set.
+    // Commits sync with sync_writes on and do not with it off.
     #[test]
-    fn test_transaction_commit_syncs_without_sync_writes() -> Result<(), StorageError> {
-        let (store, options) = create_storage_with_sync(false, false)?;
-        let before = wal_syncs(&options);
+    fn test_transaction_commit_follows_sync_writes() -> Result<(), StorageError> {
+        for (sync_writes, expected_syncs) in [(true, 1), (false, 0)] {
+            let (store, options) = create_storage_with_sync(sync_writes, false)?;
+            let before = wal_syncs(&options);
 
-        let transaction_id = store.begin_transaction();
-        store.set(
-            StorageKey::try_from("test1")?,
-            "test_value1",
-            Some(transaction_id),
-        )?;
-        store.commit_transaction(transaction_id)?;
+            let transaction_id = store.begin_transaction();
+            store.set(
+                StorageKey::try_from("test1")?,
+                "test_value1",
+                Some(transaction_id),
+            )?;
+            store.commit_transaction(transaction_id)?;
 
-        assert_eq!(wal_syncs(&options), before + 1);
-        Storage::delete_db_files(store)?;
+            assert_eq!(wal_syncs(&options), before + expected_syncs);
+            Storage::delete_db_files(store)?;
+        }
+        Ok(())
+    }
+
+    // Writes made inside the global transaction sync once, when it commits.
+    #[test]
+    fn test_global_transaction_commit_follows_sync_writes() -> Result<(), StorageError> {
+        for (sync_writes, expected_syncs) in [(true, 1), (false, 0)] {
+            let (store, options) = create_storage_with_sync(sync_writes, false)?;
+            let before = wal_syncs(&options);
+
+            store.begin_global_transaction()?;
+            store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+            store.set(StorageKey::try_from("test2")?, "test_value2", None)?;
+            assert_eq!(wal_syncs(&options), before);
+            store.commit_global_transaction()?;
+
+            assert_eq!(wal_syncs(&options), before + expected_syncs);
+            Storage::delete_db_files(store)?;
+        }
         Ok(())
     }
 
