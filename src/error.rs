@@ -8,8 +8,10 @@ pub enum StorageError {
     NotFound(String),
     #[error("Error modifying storage")]
     WriteError,
-    #[error("Error reading from storage")]
-    ReadError,
+    #[error("Error reading from storage: {0}")]
+    ReadError(String),
+    #[error("CURRENT file is missing in {0}, the database needs to be repaired")]
+    MissingCurrent(String),
     #[error("Error converting data")]
     ConversionError,
     #[error("Error serializing/deserializing data")]
