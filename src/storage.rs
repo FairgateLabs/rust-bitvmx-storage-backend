@@ -756,7 +756,7 @@ impl Storage {
     pub fn rollback_transaction(&self, transaction_id: Uuid) -> Result<(), StorageError> {
         let mut map = self.transactions.borrow_mut();
         map.remove(&transaction_id)
-            .ok_or(StorageError::NotFound("Transaction".to_string()))?;
+            .ok_or(StorageError::TransactionRollbackFailed)?;
         Ok(())
     }
 
@@ -1595,7 +1595,8 @@ mod tests {
         Ok(())
     }
 
-    // Committing or rollbacking when no global transaction is active should return a NotFound(Transaction) error.
+    // Committing or rolling back when no global transaction is active should return
+    // operation-specific errors.
     #[test]
     fn test_cant_commit_or_rollback_global_transaction_if_not_active() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -1611,13 +1612,10 @@ mod tests {
         }
 
         let result = store.rollback_global_transaction();
-        assert!(result.is_err());
-        match result {
-            Err(StorageError::NotFound(value)) => {
-                assert_eq!(value, "Transaction");
-            }
-            _ => panic!("Expected NotFound(Transaction) error"),
-        }
+        assert!(matches!(
+            result,
+            Err(StorageError::TransactionRollbackFailed)
+        ));
 
         Ok(())
     }

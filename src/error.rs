@@ -18,6 +18,8 @@ pub enum StorageError {
     CreationError(#[from] rocksdb::Error),
     #[error("Error while commiting changes")]
     CommitError,
+    #[error("Failed to roll back transaction")]
+    TransactionRollbackFailed,
     #[error("Failed I/O action: {0}")]
     IoError(#[from] IoError),
     #[error("Failed to encrypt data")]
