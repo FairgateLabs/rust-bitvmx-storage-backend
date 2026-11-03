@@ -5,6 +5,7 @@ use redact::Secret;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use storage_backend::key::StorageKey;
 use storage_backend::storage::{KeyValueStore, Storage};
 use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
@@ -73,7 +74,7 @@ struct UiSettings {
 #[derive(Subcommand, Debug)]
 enum Action {
     New(StorageSettings),
-    Repair(RepairSettings),
+    Repair(RepairSettings), /// Exits with 2 if some data files could not be recovered.
     Write(StorageKeyValue),
     Read(StorageAndKey),
     Delete(StorageAndKey),
@@ -222,7 +223,10 @@ fn load_ui_storage_config(settings: &UiSettings) -> Result<StorageConfig, String
     })
 }
 
-pub fn run(args: Cli) -> Result<(), String> {
+// Exit code when repair finished but had to drop data files.
+const EXIT_REPAIR_LOST_DATA: u8 = 2;
+
+pub fn run(args: Cli) -> Result<ExitCode, String> {
     let storage = match args.action {
         Action::New(storage_settings) => {
             let path = storage_settings.storage_path.to_string_lossy().to_string();
@@ -237,19 +241,27 @@ pub fn run(args: Cli) -> Result<(), String> {
             }
 
             println!("Created new storage at {:?}", storage_settings.storage_path);
-            return Ok(());
+            return Ok(ExitCode::SUCCESS);
         }
         Action::Repair(repair_settings) => {
-            Storage::repair(&repair_settings.storage_path).map_err(|e| e.to_string())?;
+            let report =
+                Storage::repair(&repair_settings.storage_path).map_err(|e| e.to_string())?;
             println!("Repaired storage at {:?}", repair_settings.storage_path);
-            return Ok(());
+            if report.lost_files.is_empty() {
+                return Ok(ExitCode::SUCCESS);
+            }
+            eprintln!("Data was lost, these files could not be recovered:");
+            for file in &report.lost_files {
+                eprintln!("  {}", file.display());
+            }
+            return Ok(ExitCode::from(EXIT_REPAIR_LOST_DATA));
         }
         #[cfg(feature = "ui")]
         Action::Ui(ui_settings) => {
             let config = load_ui_storage_config(&ui_settings)?;
             let storage = Storage::open(&config).map_err(|e| e.to_string())?;
             run_tui(&storage).map_err(|e| e.to_string())?;
-            return Ok(());
+            return Ok(ExitCode::SUCCESS);
         }
         _ => {
             let config = StorageConfig::new(
@@ -419,5 +431,5 @@ pub fn run(args: Cli) -> Result<(), String> {
         }
     }
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }

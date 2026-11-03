@@ -70,6 +70,8 @@ The `Storage` struct in `src/storage.rs` provides a comprehensive set of methods
 
 - **delete_db_files**: Deletes all database files at the specified path.
 
+- **repair**: Repairs a damaged database that is not open and returns a `RepairReport` with the files it could not recover. See [Repairing a damaged database](#repairing-a-damaged-database).
+
 ## Usage
 
 To use the `Storage` struct for managing a key-value store, follow these steps:
@@ -191,6 +193,36 @@ To use the `Storage` struct for managing a key-value store, follow these steps:
      ```rust
      Storage::delete_db_files(&PathBuf::from("path/to/database"))?;
      ```
+
+## Durability
+
+Every write is fsynced, including transaction commits. Writes inside a transaction are synced once, when it commits. To skip the fsync, turn `sync_writes` off in the `StorageConfig`:
+
+```rust
+let config = StorageConfig::new("path/to/database".to_string(), None).without_sync_writes();
+```
+
+With `sync_writes` off, a write can be lost if the machine crashes before the operating system flushes it to disk.
+
+## Repairing a damaged database
+
+Opening a database whose files are damaged returns an error: `MissingCurrent` when the `CURRENT` file is missing from a directory that has database files, and a `CreationError` with the RocksDB message when `CURRENT` or the `MANIFEST` is damaged. Reads that hit a damaged block return `ReadError` with the RocksDB message, and listings and backups return it too.
+
+To repair a database, close every process that uses it and run:
+
+```
+rust-bitvmx-storage-backend repair --storage-path path/to/database
+```
+
+The path must exist. Repair rebuilds `CURRENT` and the `MANIFEST` from the SST files. It moves the SST files it cannot read to a `lost` directory inside the database directory, and keeps them there for inspection. `Storage::repair` returns a `RepairReport` whose `lost_files` lists those files, and the command prints them to stderr. Its exit code is:
+
+| Code | Meaning |
+|------|---------|
+| 0 | Repaired, nothing lost |
+| 1 | The command failed |
+| 2 | Repaired, but the files listed on stderr could not be recovered |
+
+Damage inside the write-ahead log (`.log` files) is not reported. When RocksDB finds a damaged record in the WAL, it drops that record and everything after it, both when opening the database and when repairing it. Writes that were not yet flushed to an SST file can be lost this way without an error. The repair archives the WAL in `lost` after converting it, so files with the `.log` extension there do not mean data was lost.
 
 ## Contributing
 Contributions are welcome! Please open an issue or submit a pull request on GitHub.

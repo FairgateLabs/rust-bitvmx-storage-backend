@@ -26,10 +26,7 @@ fn backup_temp_storage() -> PathBuf {
 fn create_path_and_storage() -> Result<(PathBuf, StorageConfig, Storage), StorageError> {
     let path = &temp_storage();
 
-    let config = StorageConfig {
-        path: path.to_string_lossy().to_string(),
-        password: None,
-    };
+    let config = StorageConfig::new(path.to_string_lossy().to_string(), None);
     let storage = Storage::new(&config)?;
 
     Ok((path.clone(), config, storage))

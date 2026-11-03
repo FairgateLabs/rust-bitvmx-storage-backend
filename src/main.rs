@@ -1,14 +1,18 @@
 use clap::Parser;
+use std::process::ExitCode;
 mod cli;
 #[cfg(feature = "ui")]
 mod tui;
 use cli::{run, Cli};
 
-fn main() {
+fn main() -> ExitCode {
     let args = Cli::parse();
 
     match run(args) {
-        Ok(_) => (),
-        Err(e) => println!("{}", e),
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("{}", e);
+            ExitCode::FAILURE
+        }
     }
 }
