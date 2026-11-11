@@ -1,0 +1,9 @@
+[advisories]
+ignore = [
+    # crypto-bigint 0.5.5: timing variability in constant-time ops.
+    # Pulled in via age 0.12.1 -> p256/hpke -> elliptic-curve 0.13; fix requires
+    # crypto-bigint >=0.7.6, which no released age version supports yet.
+    # We only use age's scrypt (passphrase) identity, not the elliptic-curve code.
+    # Remove once age publishes a release on the newer RustCrypto stack.
+    "RUSTSEC-2026-0387",
+]
