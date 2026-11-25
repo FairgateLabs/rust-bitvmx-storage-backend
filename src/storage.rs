@@ -34,40 +34,6 @@ pub struct Storage {
     sync_writes: bool,
 }
 
-pub trait KeyValueStore {
-    fn get<V>(
-        &self,
-        key: impl AsRef<StorageKey>,
-        transaction_id: Option<Uuid>,
-    ) -> Result<Option<V>, StorageError>
-    where
-        V: DeserializeOwned;
-
-    fn set<V>(
-        &self,
-        key: impl AsRef<StorageKey>,
-        value: V,
-        transaction_id: Option<Uuid>,
-    ) -> Result<(), StorageError>
-    where
-        V: Serialize;
-
-    fn remove(
-        &self,
-        key: impl AsRef<StorageKey>,
-        transaction_id: Option<Uuid>,
-    ) -> Result<(), StorageError>;
-
-    fn update<V>(
-        &self,
-        key: impl AsRef<StorageKey>,
-        updates: &HashMap<&str, Value>,
-        transaction_id: Option<Uuid>,
-    ) -> Result<V, StorageError>
-    where
-        V: Serialize + DeserializeOwned + Clone;
-}
-
 // Clearing the transaction map is equivalent to rolling back all active transactions.
 impl Drop for Storage {
     fn drop(&mut self) {
@@ -548,34 +514,44 @@ impl Storage {
         Ok(result)
     }
 
-    pub fn partial_compare(
+    /// Prefix scan that returns each matching key with its value deserialized into `V`.
+    pub fn partial_compare<V>(
         &self,
         key: &str,
         transaction_id: Option<Uuid>,
-    ) -> Result<Vec<(String, String)>, StorageError> {
+    ) -> Result<Vec<(String, V)>, StorageError>
+    where
+        V: DeserializeOwned,
+    {
         self.partial_compare_limited(key, None, transaction_id)
     }
 
     /// Prefix scan stopping after `limit` entries. `None` scans the whole range.
-    pub fn partial_compare_limited(
+    pub fn partial_compare_limited<V>(
         &self,
         key: &str,
         limit: Option<usize>,
         transaction_id: Option<Uuid>,
-    ) -> Result<Vec<(String, String)>, StorageError> {
-        let mut result = Vec::new();
+    ) -> Result<Vec<(String, V)>, StorageError>
+    where
+        V: DeserializeOwned,
+    {
+        let mut entries = Vec::new();
 
         self.retrieve_partial_entries(
             key,
             limit,
-            &mut result,
+            &mut entries,
             self.effective_transaction_id(transaction_id),
         )?;
 
-        Ok(result)
+        entries
+            .into_iter()
+            .map(|(key, value)| Ok((key, decode(&value)?)))
+            .collect()
     }
 
-    /// Prefix scan that deserializes each stored value into `V`. The typed analog of `partial_compare`.
+    /// Prefix scan that returns only the values, deserialized into `V`. Use `partial_compare` when the keys are needed too.
     pub fn partial_get<V>(
         &self,
         key: &str,
@@ -597,13 +573,8 @@ impl Storage {
     where
         V: DeserializeOwned,
     {
-        let entries = self.partial_compare_limited(key, limit, transaction_id)?;
-        let mut values = Vec::with_capacity(entries.len());
-        for (_, value) in entries {
-            let value = serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
-            values.push(value);
-        }
-        Ok(values)
+        let entries = self.partial_compare_limited::<V>(key, limit, transaction_id)?;
+        Ok(entries.into_iter().map(|(_, value)| value).collect())
     }
 
     fn retrieve_partial_keys(
@@ -845,10 +816,9 @@ impl Storage {
                 .then_some(GLOBAL_TRANSACTION_ID)
         })
     }
-}
 
-impl KeyValueStore for Storage {
-    fn get<V>(
+    /// Reads the value stored under `key` and deserializes it into `V`.
+    pub fn get<V>(
         &self,
         key: impl AsRef<StorageKey>,
         transaction_id: Option<Uuid>,
@@ -859,17 +829,11 @@ impl KeyValueStore for Storage {
         let key = key.as_ref().joined();
         let value = self.read(&key, self.effective_transaction_id(transaction_id))?;
 
-        match value {
-            Some(value) => {
-                let value =
-                    serde_json::from_str(&value).map_err(|_| StorageError::ConversionError)?;
-                Ok(Some(value))
-            }
-            None => Ok(None),
-        }
+        value.as_deref().map(decode).transpose()
     }
 
-    fn set<V>(
+    /// Serializes `value` and stores it under `key`.
+    pub fn set<V>(
         &self,
         key: impl AsRef<StorageKey>,
         value: V,
@@ -884,7 +848,8 @@ impl KeyValueStore for Storage {
         self.write(&key, &value, self.effective_transaction_id(transaction_id))
     }
 
-    fn remove(
+    /// Deletes the value stored under `key`.
+    pub fn remove(
         &self,
         key: impl AsRef<StorageKey>,
         transaction_id: Option<Uuid>,
@@ -894,7 +859,8 @@ impl KeyValueStore for Storage {
         self.delete(&key, self.effective_transaction_id(transaction_id))
     }
 
-    fn update<V>(
+    /// Overwrites the given top-level fields of the object stored under `key` and returns the updated value.
+    pub fn update<V>(
         &self,
         key: impl AsRef<StorageKey>,
         updates: &HashMap<&str, Value>,
@@ -953,6 +919,11 @@ fn lost_files(path: &Path) -> Vec<PathBuf> {
         .map(|entry| entry.path())
         .filter(|file| file.extension().is_some_and(|ext| ext == "sst"))
         .collect()
+}
+
+// Values are stored as JSON text. This is the only place that turns stored text back into a typed value.
+fn decode<V: DeserializeOwned>(raw: &str) -> Result<V, StorageError> {
+    serde_json::from_str(raw).map_err(|_| StorageError::ConversionError)
 }
 
 fn create_options() -> rocksdb::Options {
@@ -1100,12 +1071,12 @@ mod tests {
     #[test]
     fn test_find_multiple_answers() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.write("test1", "test_value1", None)?;
-        store.write("test2", "test_value2", None)?;
-        store.write("test3", "test_value3", None)?;
-        store.write("tes4", "test_value4", None)?;
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        store.set(StorageKey::try_from("test2")?, "test_value2", None)?;
+        store.set(StorageKey::try_from("test3")?, "test_value3", None)?;
+        store.set(StorageKey::try_from("tes4")?, "test_value4", None)?;
 
-        let result = store.partial_compare("test", None)?;
+        let result = store.partial_compare::<String>("test", None)?;
         assert_eq!(
             result,
             vec![
@@ -1123,10 +1094,63 @@ mod tests {
     #[test]
     fn test_partial_compare_encrypted_ignores_out_of_range_entries() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(true)?;
-        store.write("AAA", "test_value", None)?;
+        store.set(StorageKey::try_from("AAA")?, "test_value", None)?;
 
-        let result = store.partial_compare("AAA", None)?;
+        let result = store.partial_compare::<String>("AAA", None)?;
         assert_eq!(result, vec![("AAA".to_string(), "test_value".to_string())]);
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test partial_compare deserializes structured values and keeps each one paired with its key.
+    #[test]
+    fn test_partial_compare_deserializes_values_with_their_keys() -> Result<(), StorageError> {
+        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        struct Item {
+            name: String,
+            count: u32,
+        }
+
+        let (_, _, store) = create_path_and_storage(true)?;
+        let first = Item {
+            name: "first".to_string(),
+            count: 1,
+        };
+        let second = Item {
+            name: "second".to_string(),
+            count: 2,
+        };
+        store.set(StorageKey::new(["item", "a"])?, &first, None)?;
+        store.set(StorageKey::new(["item", "b"])?, &second, None)?;
+
+        let result: Vec<(String, Item)> = store.partial_compare("item/", None)?;
+        assert_eq!(
+            result,
+            vec![
+                ("item/a".to_string(), first),
+                ("item/b".to_string(), second)
+            ]
+        );
+
+        Storage::delete_db_files(store)?;
+        Ok(())
+    }
+
+    // Test the prefix scans report a value that does not match the requested type as a ConversionError.
+    #[test]
+    fn test_partial_compare_rejects_values_of_the_wrong_type() -> Result<(), StorageError> {
+        let (_, _, store) = create_path_and_storage(false)?;
+        store.set(StorageKey::try_from("number")?, 42, None)?;
+
+        assert!(matches!(
+            store.partial_compare::<String>("number", None),
+            Err(StorageError::ConversionError)
+        ));
+        assert!(matches!(
+            store.partial_get::<String>("number", None),
+            Err(StorageError::ConversionError)
+        ));
 
         Storage::delete_db_files(store)?;
         Ok(())
@@ -1152,16 +1176,16 @@ mod tests {
     #[test]
     fn test_partial_compare_limited_stops_at_the_limit() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
-        store.write("test2", "test_value2", None)?;
-        store.write("test1", "test_value1", None)?;
-        store.write("test3", "test_value3", None)?;
+        store.set(StorageKey::try_from("test2")?, "test_value2", None)?;
+        store.set(StorageKey::try_from("test1")?, "test_value1", None)?;
+        store.set(StorageKey::try_from("test3")?, "test_value3", None)?;
 
         assert_eq!(
-            store.partial_compare_limited("test", Some(1), None)?,
+            store.partial_compare_limited::<String>("test", Some(1), None)?,
             vec![("test1".to_string(), "test_value1".to_string())]
         );
         assert_eq!(
-            store.partial_compare_limited("test", Some(2), None)?,
+            store.partial_compare_limited::<String>("test", Some(2), None)?,
             vec![
                 ("test1".to_string(), "test_value1".to_string()),
                 ("test2".to_string(), "test_value2".to_string())
@@ -1169,14 +1193,16 @@ mod tests {
         );
         // A limit larger than the matching range returns the whole range.
         assert_eq!(
-            store.partial_compare_limited("test", Some(10), None)?.len(),
+            store
+                .partial_compare_limited::<String>("test", Some(10), None)?
+                .len(),
             3
         );
         assert!(store
-            .partial_compare_limited("test", Some(0), None)?
+            .partial_compare_limited::<String>("test", Some(0), None)?
             .is_empty());
         assert!(store
-            .partial_compare_limited("missing", Some(1), None)?
+            .partial_compare_limited::<String>("missing", Some(1), None)?
             .is_empty());
 
         Storage::delete_db_files(store)?;
@@ -1253,7 +1279,7 @@ mod tests {
 
         store.rollback_global_transaction()?;
         assert!(store
-            .partial_compare_limited("test", Some(1), None)?
+            .partial_compare_limited::<String>("test", Some(1), None)?
             .is_empty());
         assert!(store
             .partial_compare_keys_limited("test", Some(1), None)?
@@ -1417,7 +1443,7 @@ mod tests {
         Ok(())
     }
 
-    // Test encryption: create encrypted storage and verify set/get serializing via KeyValueStore.
+    // Test encryption: create encrypted storage and verify set/get serialize and deserialize the value.
     #[test]
     fn test_encrypt_and_decrypt() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(true)?;
@@ -1538,7 +1564,7 @@ mod tests {
         Ok(())
     }
 
-    // Test KeyValueStore remove() saves deletion (non-transactional).
+    // Test remove() saves deletion (non-transactional).
     #[test]
     fn test_remove_value() -> Result<(), StorageError> {
         let (_, _, store) = create_path_and_storage(false)?;
@@ -1715,8 +1741,8 @@ mod tests {
 
         let scan_key = StorageKey::new(["program", "123"])?;
         assert_eq!(
-            store.partial_compare(&scan_key.to_scan_prefix(), None)?,
-            vec![("program/123/state".to_string(), "\"running\"".to_string())]
+            store.partial_compare::<String>(&scan_key.to_scan_prefix(), None)?,
+            vec![("program/123/state".to_string(), "running".to_string())]
         );
 
         store.remove(&key, None)?;
@@ -1956,7 +1982,7 @@ mod tests {
 
         assert_read_error(store.keys(None));
         assert_read_error(store.partial_compare_keys("key", None));
-        assert_read_error(store.partial_compare("key", None));
+        assert_read_error(store.partial_compare::<String>("key", None));
         assert_read_error(store.is_empty(None));
         Storage::delete_db_files(store)?;
         Ok(())

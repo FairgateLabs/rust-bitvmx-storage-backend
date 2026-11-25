@@ -166,7 +166,7 @@ To use the `Storage` struct for managing a key-value store, follow these steps:
 
      ```rust
      let keys_with_prefix = storage.partial_compare_keys("prefix")?;
-     let key_value_pairs = storage.partial_compare("prefix")?;
+     let key_value_pairs: Vec<(String, MyType)> = storage.partial_compare("prefix")?;
      let values: Vec<MyType> = storage.partial_get("prefix")?;
      ```
 
@@ -176,7 +176,7 @@ To use the `Storage` struct for managing a key-value store, follow these steps:
 
      ```rust
      let first_key: Vec<String> = storage.partial_compare_keys_limited("prefix", Some(1))?;
-     let first_pair = storage.partial_compare_limited("prefix", Some(1))?;
+     let first_pair: Vec<(String, MyType)> = storage.partial_compare_limited("prefix", Some(1))?;
      let first_value: Vec<MyType> = storage.partial_get_limited("prefix", Some(1))?;
      ```
 
