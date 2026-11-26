@@ -10,7 +10,7 @@ Guidance for coding agents working in this repository.
 - Public modules are declared in `src/lib.rs`:
   - `error` (`StorageError`)
   - `password_policy` (`PasswordPolicy`)
-  - `storage` (`Storage`, `KeyValueStore`)
+  - `storage` (`Storage`)
   - `storage_config` (`StorageConfig`, `PasswordPolicyConfig`)
 - `src/backup_io.rs` is crate-private and wraps `age` stream encryption/decryption for backup files.
 - Benchmarks live in `benches/backup_bench.rs` and use Criterion.

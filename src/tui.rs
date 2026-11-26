@@ -13,7 +13,7 @@ use ratatui::{
 };
 use std::{collections::BTreeMap, fs::File, io, io::Write, time::Duration};
 use storage_backend::key::StorageKey;
-use storage_backend::storage::{KeyValueStore, Storage};
+use storage_backend::storage::Storage;
 
 #[derive(Clone)]
 struct BrowserEntry {

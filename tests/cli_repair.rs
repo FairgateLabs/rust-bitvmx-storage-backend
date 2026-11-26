@@ -1,9 +1,5 @@
 use std::{fs, path::Path, process::Command};
-use storage_backend::{
-    key::StorageKey,
-    storage::{KeyValueStore, Storage},
-    storage_config::StorageConfig,
-};
+use storage_backend::{key::StorageKey, storage::Storage, storage_config::StorageConfig};
 
 const BIN: &str = env!("CARGO_BIN_EXE_rust-bitvmx-storage-backend");
 

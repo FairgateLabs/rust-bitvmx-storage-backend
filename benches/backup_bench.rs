@@ -3,10 +3,7 @@ use rand::{rng, Rng};
 use redact::Secret;
 use std::{env, fs, path::PathBuf};
 use storage_backend::{
-    error::StorageError,
-    key::StorageKey,
-    storage::{KeyValueStore, Storage},
-    storage_config::StorageConfig,
+    error::StorageError, key::StorageKey, storage::Storage, storage_config::StorageConfig,
 };
 
 fn temp_storage() -> PathBuf {

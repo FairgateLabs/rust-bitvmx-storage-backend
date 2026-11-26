@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use storage_backend::key::StorageKey;
-use storage_backend::storage::{KeyValueStore, Storage};
+use storage_backend::storage::Storage;
 use storage_backend::storage_config::{PasswordPolicyConfig, StorageConfig};
 
 #[derive(Parser, Debug)]
@@ -74,7 +74,7 @@ struct UiSettings {
 #[derive(Subcommand, Debug)]
 enum Action {
     New(StorageSettings),
-    Repair(RepairSettings), /// Exits with 2 if some data files could not be recovered.
+    Repair(RepairSettings), // Exits with 2 if some data files could not be recovered.
     Write(StorageKeyValue),
     Read(StorageAndKey),
     Delete(StorageAndKey),
@@ -316,9 +316,12 @@ pub fn run(args: Cli) -> Result<ExitCode, String> {
             );
         }
         Action::PartialCompare(storage_and_key) => {
-            let keys = storage
-                .partial_compare(&storage_and_key.key, None)
-                .map_err(|e| e.to_string())?;
+            let keys: Vec<(String, String)> = storage
+                .partial_compare::<serde_json::Value>(&storage_and_key.key, None)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|(key, value)| (key, value.to_string()))
+                .collect();
             println!(
                 "Keys partially matching {} in {:?}: {:?}",
                 storage_and_key.key, storage_and_key.storage_settings, keys
